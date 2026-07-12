@@ -1,6 +1,5 @@
 module github.com/treeverse/lakefs/webui
 
-go 1.25.5
+go 1.25.8
 
 // This module uses the go.work file to get all package dependencies from lakefs
-

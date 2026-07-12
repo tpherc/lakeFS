@@ -38,6 +38,13 @@ const (
 )
 
 const (
+	// Progress bar defaults shared across commands.
+	barSpinnerType = 14
+	barWidth       = 10
+	barThrottle    = 65 * time.Millisecond
+)
+
+const (
 	internalPageSize           = 1000 // when retrieving all records, use this page size under the hood
 	defaultAmountArgumentValue = 100  // when no amount is specified, use this value for the argument
 
@@ -199,7 +206,7 @@ func WriteTo(tpl string, data any, w io.Writer) {
 			var b strings.Builder
 			for _, row := range tab.Rows {
 				for ic, cell := range row {
-					b.WriteString(fmt.Sprint(cell))
+					fmt.Fprint(&b, cell)
 					if ic < len(row)-1 {
 						b.WriteString("\t")
 					}

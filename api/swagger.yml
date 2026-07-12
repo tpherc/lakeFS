@@ -1064,14 +1064,41 @@ components:
           type: string
         key:
           $ref: "#/components/schemas/AccessKeyCredentials"
+        firstName:
+          description: the provided first name
+          type: string
+        lastName:
+          description: the provided last name
+          type: string
+        email:
+          description: the provided email
+          type: string
+        companyName:
+          description: the provided company name
+          type: string
+        featureUpdates:
+          description: user preference to receive feature updates
+          type: boolean
+        securityUpdates:
+          description: user preference to receive security updates
+          type: boolean
       required:
         - username
 
     CommPrefsInput:
       type: object
       properties:
+        firstName:
+          description: the provided first name
+          type: string
+        lastName:
+          description: the provided last name
+          type: string
         email:
           description: the provided email
+          type: string
+        companyName:
+          description: the provided company name
           type: string
         featureUpdates:
           description: user preference to receive feature updates
@@ -5325,7 +5352,7 @@ paths:
         required: true
         schema:
           type: integer
-          maximum: 1000
+          maximum: 10000
           minimum: 1
     put:
       tags:
@@ -5383,7 +5410,7 @@ paths:
         required: true
         schema:
           type: integer
-          maximum: 1000
+          maximum: 10000
           minimum: 1
     put:
       tags:

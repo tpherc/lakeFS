@@ -33,13 +33,14 @@ class ServerConfiguration:
     _conf: lakefs_sdk.Config
     _storage_conf: dict[str, ServerStorageConfiguration] = {}
 
-    def __init__(self, client: Optional[Client] = None):
+    def __init__(self, client: Client):
         try:
             self._conf = client.sdk_client.config_api.get_config()
             if self._conf.storage_config_list is not None:
                 for storage in self._conf.storage_config_list:
-                    self._storage_conf[storage.blockstore_id] = ServerStorageConfiguration(
-                        **self._conf.storage_config.dict())
+                    if self._conf.storage_config is not None:
+                        self._storage_conf[storage.blockstore_id] = ServerStorageConfiguration(
+                            **self._conf.storage_config.dict())
             if self._conf.storage_config is not None:
                 self._storage_conf[SINGLE_STORAGE_ID] = ServerStorageConfiguration(**self._conf.storage_config.dict())
 
@@ -53,7 +54,9 @@ class ServerConfiguration:
         """
         Return the lakeFS server version
         """
-        return self._conf.version_config.version
+        if self._conf.version_config is None:
+            return ""
+        return self._conf.version_config.version or ""
 
     @property
     def storage_config(self) -> ServerStorageConfiguration:
@@ -84,21 +87,22 @@ class Client:
 
     """
 
-    _client: Optional[LakeFSClient] = None
-    _conf: Optional[ClientConfig] = None
+    _client: LakeFSClient
+    _conf: ClientConfig
     _server_conf: Optional[ServerConfiguration] = None
 
     def __init__(self, **kwargs):
         self._conf = ClientConfig(**kwargs)
         self._client = LakeFSClient(self._conf, header_name='X-Lakefs-Client',
                                     header_value='python-lakefs')
-        self._server_conf = None
-        self._reset_token_time = None
-        self._session = None
+        self._server_conf: Optional[ServerConfiguration] = None
+        self._reset_token_time: Optional[datetime.datetime] = None
+        self._session: Optional[boto3.Session] = None
 
         # Initialize auth if using IAM provider
         if self._conf.get_auth_type() is ClientConfig.AuthType.IAM:
             iam_provider = self._conf.iam_provider
+            assert iam_provider is not None
             if iam_provider.type is ClientConfig.ProviderType.AWS_IAM:
                 # boto3 session lazy loading (only if an AWS IAM provider is used)
                 import boto3 # pylint: disable=import-outside-toplevel, import-error
@@ -126,8 +130,11 @@ class Client:
                 current_time >= self._reset_token_time):
             # Refresh token:
             iam_provider = self._conf.iam_provider
+            assert iam_provider is not None
             if iam_provider.type == ClientConfig.ProviderType.AWS_IAM:
                 lakefs_host = urlparse(self._conf.host).hostname
+                assert lakefs_host is not None, "Invalid host URL"
+                assert self._session is not None, "Boto3 session is not initialized"
                 self._conf.access_token, self._reset_token_time = access_token_from_aws_iam_role(
                     self._client,
                     lakefs_host,
@@ -164,7 +171,7 @@ class Client:
         return self._reset_token_time
 
     @reset_time.setter
-    def reset_time(self, time: datetime):
+    def reset_time(self, time: datetime.datetime) -> None:
         self._reset_token_time = time
 
     def storage_config_by_id(self, storage_id=SINGLE_STORAGE_ID):
@@ -189,7 +196,7 @@ def from_aws_role(
         session: boto3.Session,
         ttl_seconds: int = 3600,
         presigned_ttl: int = 60,
-        additional_headers: dict[str, str] = None,
+        additional_headers: Optional[dict[str, str]] = None,
         **kwargs) -> Client:
     """
     Create a lakeFS client from an AWS role.
