@@ -15,6 +15,17 @@ jobs:
   goreleaser:
     runs-on: ubuntu-22.04-8-cores
     steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -30,12 +41,6 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: us-east-1
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v4
         with:
@@ -43,7 +48,17 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAP_GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
 
-      - name: Make lakectl public
-        run: aws s3 cp --recursive --acl public-read "s3://treeverse-clients-us-east/lakectl/$(echo ${GITHUB_REF##*/} | cut -d. -f1-2)" "s3://treeverse-clients-us-east/lakectl/$(echo ${GITHUB_REF##*/} | cut -d. -f1-2)" --metadata-directive REPLACE
+# Commented out for fork - uncomment to enable AWS S3 distribution and Homebrew tap
+#
+#      - name: Configure AWS Credentials
+#        uses: aws-actions/configure-aws-credentials@v4
+#        with:
+#          aws-region: us-east-1
+#          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+#
+#      # Add TAP_GITHUB_TOKEN to the GoReleaser step env above when uncommenting
+#      # TAP_GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+#
+#      - name: Make lakectl public
+#        run: aws s3 cp --recursive --acl public-read "s3://treeverse-clients-us-east/lakectl/$(echo ${GITHUB_REF##*/} | cut -d. -f1-2)" "s3://treeverse-clients-us-east/lakectl/$(echo ${GITHUB_REF##*/} | cut -d. -f1-2)" --metadata-directive REPLACE

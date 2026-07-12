@@ -66,20 +66,24 @@ changelog:
     exclude:
     - '^docs:'
     - '^test:'
-blobs:
-- provider: s3
-  region: us-east-1
-  bucket: treeverse-clients-us-east
-  folder: "lakectl/{{.Version}}"
-  ids:
-   - lakectl
-brews:
-- name: lakefs
-  homepage: https://github.com/treeverse/lakefs 
-  description: "lakeFS is an open-source tool that transforms your object storage into a Git-like repository. It enables you to manage your data lake the way you manage your code."
-  ids:
-    - default
-  tap:
-    owner: treeverse
-    name: homebrew-lakefs
-    token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+
+# S3 blob upload and Homebrew tap commented out for fork
+# Uncomment below sections to enable S3 distribution and Homebrew tap updates
+#
+# blobs:
+# - provider: s3
+#   region: us-east-1
+#   bucket: treeverse-clients-us-east
+#   folder: "lakectl/{{.Version}}"
+#   ids:
+#    - lakectl
+# brews:
+# - name: lakefs
+#   homepage: https://github.com/treeverse/lakefs 
+#   description: "lakeFS is an open-source tool that transforms your object storage into a Git-like repository. It enables you to manage your data lake the way you manage your code."
+#   ids:
+#     - default
+#   tap:
+#     owner: treeverse
+#     name: homebrew-lakefs
+#     token: "{{ .Env.TAP_GITHUB_TOKEN }}"

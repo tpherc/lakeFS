@@ -16,5 +16,5 @@ func SetupService(t *testing.T, ctx context.Context, secret []byte) (*acl.AuthSe
 	kvStore := kvtest.GetStore(ctx, t)
 	return acl.NewAuthService(kvStore, crypt.NewSecretStore(secret), authparams.ServiceCache{
 		Enabled: false,
-	}), kvStore
+	}, true), kvStore
 }

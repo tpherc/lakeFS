@@ -21,12 +21,13 @@ import (
 const ServerPartitionKey = "aclauth"
 
 type AuthService struct {
-	store       kv.Store
-	secretStore crypt.SecretStore
-	cache       auth.Cache
+	store        kv.Store
+	secretStore  crypt.SecretStore
+	cache        auth.Cache
+	advancedAuth bool
 }
 
-func NewAuthService(store kv.Store, secretStore crypt.SecretStore, cacheConf params.ServiceCache) *AuthService {
+func NewAuthService(store kv.Store, secretStore crypt.SecretStore, cacheConf params.ServiceCache, advancedAuth bool) *AuthService {
 	var cache auth.Cache
 	if cacheConf.Enabled {
 		cache = auth.NewLRUCache(cacheConf.Size, cacheConf.TTL, cacheConf.Jitter)
@@ -34,15 +35,16 @@ func NewAuthService(store kv.Store, secretStore crypt.SecretStore, cacheConf par
 		cache = &auth.DummyCache{}
 	}
 	res := &AuthService{
-		store:       store,
-		secretStore: secretStore,
-		cache:       cache,
+		store:        store,
+		secretStore:  secretStore,
+		cache:        cache,
+		advancedAuth: advancedAuth,
 	}
 	return res
 }
 
 func (s *AuthService) IsAdvancedAuth() bool {
-	return false
+	return s.advancedAuth
 }
 
 func (s *AuthService) ListKVPaged(ctx context.Context, protoType protoreflect.MessageType, params *model.PaginationParams, prefix []byte, secondary bool) ([]proto.Message, *model.Paginator, error) {

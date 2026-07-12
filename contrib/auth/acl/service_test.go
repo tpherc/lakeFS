@@ -148,7 +148,7 @@ func TestAuthService_ListUsers_PagedWithPrefix(t *testing.T) {
 	kvStore := kvtest.GetStore(ctx, t)
 	s := authacl.NewAuthService(kvStore, crypt.NewSecretStore(someSecret), authparams.ServiceCache{
 		Enabled: false,
-	})
+	}, true)
 
 	users := []string{"bar", "barn", "baz", "foo", "foobar", "foobaz"}
 	for _, u := range users {
@@ -198,7 +198,7 @@ func TestAuthService_ListPaged(t *testing.T) {
 	kvStore := kvtest.GetStore(ctx, t)
 	s := authacl.NewAuthService(kvStore, crypt.NewSecretStore(someSecret), authparams.ServiceCache{
 		Enabled: false,
-	})
+	}, true)
 
 	const chars = "abcdefghijklmnopqrstuvwxyz"
 	for _, c := range chars {
@@ -254,19 +254,19 @@ func BenchmarkKVAuthService_ListEffectivePolicies(b *testing.B) {
 
 	serviceWithoutCache := authacl.NewAuthService(kvStore, crypt.NewSecretStore(someSecret), authparams.ServiceCache{
 		Enabled: false,
-	})
+	}, true)
 	serviceWithCache := authacl.NewAuthService(kvStore, crypt.NewSecretStore(someSecret), authparams.ServiceCache{
 		Enabled: true,
 		Size:    1024,
 		TTL:     20 * time.Second,
 		Jitter:  3 * time.Second,
-	})
+	}, true)
 	serviceWithCacheLowTTL := authacl.NewAuthService(kvStore, crypt.NewSecretStore(someSecret), authparams.ServiceCache{
 		Enabled: true,
 		Size:    1024,
 		TTL:     1 * time.Millisecond,
 		Jitter:  1 * time.Millisecond,
-	})
+	}, true)
 	userName := userWithPolicies(b, serviceWithoutCache, userPoliciesForTesting)
 
 	b.Run("without_cache", func(b *testing.B) {

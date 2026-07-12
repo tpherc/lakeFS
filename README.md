@@ -1,6 +1,17 @@
 <p align="center">
   <img src="docs/src/assets/img/logo_large.png"/>
 </p>
+
+> **🔓 This Fork Enables Multi-User RBAC**
+> 
+> This is a fork of [treeverse/lakeFS](https://github.com/treeverse/lakeFS) that enables **Role-Based Access Control (RBAC)** for the open-source version. The upstream OSS release only supports single-user mode, with RBAC reserved for lakeFS Enterprise.
+>
+> **What's enabled:**
+> - `auth.ui_config.rbac: internal` — Full RBAC with users, groups, and policies
+> - `auth.ui_config.rbac: simplified` — Multi-user with ACL-based permissions
+>
+> See [PR #1](https://github.com/Face-to-Face-IT/lakeFS/pull/1) for details. All code is Apache 2.0 licensed.
+
 <p align="center">
 	<a href="https://raw.githubusercontent.com/treeverse/lakeFS/master/LICENSE" >
 		<img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache License" /></a>

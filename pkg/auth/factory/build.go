@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/treeverse/lakefs/contrib/auth/acl"
 	"github.com/treeverse/lakefs/pkg/auth"
 	"github.com/treeverse/lakefs/pkg/auth/crypt"
 	authparams "github.com/treeverse/lakefs/pkg/auth/params"
@@ -18,7 +19,7 @@ func checkAuthModeSupport(authCfg config.AuthConfig) error {
 	baseAuthCfg := authCfg.GetBaseAuthConfig()
 	authUICfg := authCfg.GetAuthUIConfig()
 
-	if authUICfg.IsAuthBasic() { // Basic mode
+	if authUICfg.IsAuthBasic() || authUICfg.RBAC == config.AuthRBACInternal { // Basic or Internal mode
 		return nil
 	}
 	if !authUICfg.IsAuthUISimplified() && !baseAuthCfg.IsAuthTypeAPI() {
@@ -64,6 +65,26 @@ Please run "lakefs superuser -h" and follow the instructions on how to migrate a
 				logger.WithError(err).Fatal("basic auth migration failed")
 			}
 		}
+		return auth.NewMonitoredAuthService(apiService)
+	}
+
+	if authUICfg.RBAC == config.AuthRBACInternal {
+		apiService := acl.NewAuthService(
+			kvStore,
+			secretStore,
+			authparams.ServiceCache(baseAuthCfg.Cache),
+			true, // advancedAuth = true for internal mode (full RBAC with policies)
+		)
+		return auth.NewMonitoredAuthService(apiService)
+	}
+
+	if authUICfg.IsAuthUISimplified() {
+		apiService := acl.NewAuthService(
+			kvStore,
+			secretStore,
+			authparams.ServiceCache(baseAuthCfg.Cache),
+			false, // advancedAuth = false for simplified mode (ACL-only)
+		)
 		return auth.NewMonitoredAuthService(apiService)
 	}
 
