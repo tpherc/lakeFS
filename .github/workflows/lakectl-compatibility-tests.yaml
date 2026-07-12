@@ -51,7 +51,7 @@ jobs:
         run: make build-binaries VERSION=${{ env.VERSION }}
 
       - name: Store binaries
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: binaries
           path: |
@@ -87,7 +87,7 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: Download binaries
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: binaries
           path: bin
@@ -97,17 +97,17 @@ jobs:
 
       - name: Download lakefs from GitHub Release
         if: matrix.lakefs != 'HEAD'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release download ${{ matrix.lakefs != 'latest' && matrix.lakefs || '' }} -R treeverse/lakeFS -p "lakeFS_*_Linux_x86_64.tar.gz" -O- | tar -xz -C bin lakefs
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download lakectl from GitHub Release
         if: matrix.lakectl != 'HEAD'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release download ${{ matrix.lakectl != 'latest' && matrix.lakectl || '' }} -R treeverse/lakeFS -p "lakeFS_*_Linux_x86_64.tar.gz" -O- | tar -xz -C bin lakectl
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check binaries' versions
         run: |

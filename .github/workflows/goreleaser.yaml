@@ -59,23 +59,24 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: v1.26.2
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+
 
 # Commented out for fork - uncomment to enable AWS S3 distribution and Homebrew tap
 #
 #      - name: Configure AWS Credentials
-#        uses: aws-actions/configure-aws-credentials@v4
+#        uses: aws-actions/configure-aws-credentials@v6
 #        with:
 #          aws-region: us-east-1
 #          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
 #
 #      # Add TAP_GITHUB_TOKEN to the GoReleaser step env above when uncommenting
-#      # TAP_GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+#      # TAP_GITHUB_TOKEN: ${{ secrets.TREEVERSE_CI_TOKEN }}
 #
 #      - name: Make lakectl public
 #        run: aws s3 cp --recursive --acl public-read "s3://treeverse-clients-us-east/lakectl/$(echo ${GITHUB_REF##*/} | cut -d. -f1-2)" "s3://treeverse-clients-us-east/lakectl/$(echo ${GITHUB_REF##*/} | cut -d. -f1-2)" --metadata-directive REPLACE
