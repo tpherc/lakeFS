@@ -13,13 +13,22 @@ import (
 	"github.com/treeverse/lakefs/pkg/logging"
 )
 
-var errSimplifiedOrExternalAuth = errors.New("cannot set auth.ui_config.rbac to non-simplified without setting an external auth service")
+var (
+	errSimplifiedOrExternalAuth = errors.New("cannot set auth.ui_config.rbac to non-simplified without setting an external auth service")
+	errAmbiguousLocalRBAC       = errors.New("auth.ui_config.rbac internal with features.local_rbac enabled cannot also configure auth.api.endpoint")
+)
 
-func checkAuthModeSupport(authCfg config.AuthConfig) error {
+func checkAuthModeSupport(authCfg config.AuthConfig, localRBAC bool) error {
 	baseAuthCfg := authCfg.GetBaseAuthConfig()
 	authUICfg := authCfg.GetAuthUIConfig()
 
-	if authUICfg.IsAuthBasic() || authUICfg.RBAC == config.AuthRBACInternal { // Basic or Internal mode
+	if authUICfg.IsAuthBasic() {
+		return nil
+	}
+	if authUICfg.UsesLocalRBAC(localRBAC) {
+		if baseAuthCfg.IsAuthTypeAPI() {
+			return errAmbiguousLocalRBAC
+		}
 		return nil
 	}
 	if !authUICfg.IsAuthUISimplified() && !baseAuthCfg.IsAuthTypeAPI() {
@@ -32,7 +41,8 @@ func NewAuthService(ctx context.Context, cfg config.Config, logger logging.Logge
 	authCfg := cfg.AuthConfig()
 	baseAuthCfg := authCfg.GetBaseAuthConfig()
 	authUICfg := authCfg.GetAuthUIConfig()
-	if err := checkAuthModeSupport(authCfg); err != nil {
+	localRBAC := cfg.GetBaseConfig().Features.LocalRBAC
+	if err := checkAuthModeSupport(authCfg, localRBAC); err != nil {
 		logger.WithError(err).Fatal("Unsupported auth mode")
 	}
 
@@ -68,12 +78,12 @@ Please run "lakefs superuser -h" and follow the instructions on how to migrate a
 		return auth.NewMonitoredAuthService(apiService)
 	}
 
-	if authUICfg.RBAC == config.AuthRBACInternal {
+	if authUICfg.UsesLocalRBAC(localRBAC) {
 		apiService := acl.NewAuthService(
 			kvStore,
 			secretStore,
 			authparams.ServiceCache(baseAuthCfg.Cache),
-			true, // advancedAuth = true for internal mode (full RBAC with policies)
+			true, // advancedAuth = true for local RBAC mode (full users, groups, and policies)
 		)
 		return auth.NewMonitoredAuthService(apiService)
 	}

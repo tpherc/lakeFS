@@ -28,15 +28,21 @@ func extractSecurityRequirements(router routers.Router, r *http.Request) (openap
 	return *route.Operation.Security, nil
 }
 
-func GenericAuthMiddleware(logger logging.Logger, authenticator auth.Authenticator, authService auth.Service, oidcConfig *auth.OIDCConfig, cookieAuthConfig *auth.CookieAuthConfig) (func(next http.Handler) http.Handler, error) {
+func GenericAuthMiddleware(logger logging.Logger, authenticator auth.Authenticator, authService auth.Service, oidcConfig *auth.OIDCConfig, cookieAuthConfig *auth.CookieAuthConfig, secureCookies bool) (func(next http.Handler) http.Handler, error) {
 	swagger, err := apigen.GetSwagger()
 	if err != nil {
 		return nil, err
 	}
-	sessionStore := sessions.NewCookieStore(authService.SecretStore().SharedSecret())
+	sessionStore, err := auth.NewSessionStore(authService.SecretStore().SharedSecret(), auth.SessionStoreOptions{
+		MaxAge: sessionMaxAge,
+		Secure: secureCookies,
+	})
+	if err != nil {
+		return nil, err
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			user, err := checkSecurityRequirements(r, swagger.Security, logger, authenticator, authService, sessionStore, oidcConfig, cookieAuthConfig)
+			user, err := checkSecurityRequirements(w, r, swagger.Security, logger, authenticator, authService, sessionStore, oidcConfig, cookieAuthConfig)
 			if err != nil {
 				writeAuthError(w, r, err, http.StatusUnauthorized, ErrAuthenticatingRequest.Error())
 				return
@@ -67,7 +73,7 @@ func AuthMiddleware(logger logging.Logger, swagger *openapi3.T, authenticator au
 				writeAuthError(w, r, err, http.StatusBadRequest, err.Error())
 				return
 			}
-			user, err := checkSecurityRequirements(r, securityRequirements, logger, authenticator, authService, sessionStore, oidcConfig, cookieAuthConfig)
+			user, err := checkSecurityRequirements(w, r, securityRequirements, logger, authenticator, authService, sessionStore, oidcConfig, cookieAuthConfig)
 			if err != nil {
 				writeAuthError(w, r, err, http.StatusUnauthorized, ErrAuthenticatingRequest.Error())
 				return
@@ -84,7 +90,8 @@ func AuthMiddleware(logger logging.Logger, swagger *openapi3.T, authenticator au
 // checkSecurityRequirements goes over the security requirements and checks the authentication.
 // It returns the user information and error if the security check was required.
 // It will return nil user and nil error in case of no security checks to match.
-func checkSecurityRequirements(r *http.Request,
+func checkSecurityRequirements(w http.ResponseWriter,
+	r *http.Request,
 	securityRequirements openapi3.SecurityRequirements,
 	logger logging.Logger,
 	authenticator auth.Authenticator,
@@ -121,7 +128,10 @@ func checkSecurityRequirements(r *http.Request,
 				}
 				user, err = auth.UserByAuth(ctx, authenticator, authService, accessKey, secretKey)
 			case "cookie_auth":
-				internalAuthSession, _ := sessionStore.Get(r, auth.InternalAuthSessionName)
+				internalAuthSession, getErr := sessionStore.Get(r, auth.InternalAuthSessionName)
+				if getErr != nil {
+					return nil, getErr
+				}
 				token := ""
 				if internalAuthSession != nil {
 					token, _ = internalAuthSession.Values[auth.TokenSessionKeyName].(string)
@@ -130,18 +140,27 @@ func checkSecurityRequirements(r *http.Request,
 					continue
 				}
 				user, err = auth.UserByToken(ctx, authService, token)
+				if err == nil && user != nil && auth.SessionNeedsEncodingUpgrade(internalAuthSession) {
+					err = auth.SaveSession(r, w, internalAuthSession)
+				}
 			case "oidc_auth":
 				oidcSession, getErr := sessionStore.Get(r, auth.OIDCAuthSessionName)
 				if getErr != nil {
 					return nil, getErr
 				}
 				user, err = auth.UserFromOIDCSession(ctx, logger, authService, oidcSession, oidcConfig)
+				if err == nil && user != nil && auth.SessionNeedsEncodingUpgrade(oidcSession) {
+					err = auth.SaveSession(r, w, oidcSession)
+				}
 			case "saml_auth":
 				samlSession, getErr := sessionStore.Get(r, auth.SAMLAuthSessionName)
 				if getErr != nil {
 					return nil, getErr
 				}
 				user, err = auth.UserFromSAMLSession(ctx, logger, authService, samlSession, cookieAuthConfig)
+				if err == nil && user != nil && auth.SessionNeedsEncodingUpgrade(samlSession) {
+					err = auth.SaveSession(r, w, samlSession)
+				}
 			default:
 				logger.WithField("provider", provider).Error("Authentication middleware unknown security requirement provider")
 				return nil, auth.ErrAuthenticatingRequest

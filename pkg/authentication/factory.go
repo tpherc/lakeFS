@@ -10,7 +10,7 @@ import (
 	"github.com/treeverse/lakefs/pkg/logging"
 )
 
-func NewAuthenticationService(_ context.Context, c config.Config, logger logging.Logger) (Service, error) {
+func NewAuthenticationService(ctx context.Context, c config.Config, logger logging.Logger) (Service, error) {
 	baseAuthCfg := c.AuthConfig().GetBaseAuthConfig()
 	if baseAuthCfg.IsAuthenticationTypeAPI() {
 		return NewAPIService(
@@ -18,6 +18,9 @@ func NewAuthenticationService(_ context.Context, c config.Config, logger logging
 			baseAuthCfg.CookieAuthVerification.ValidateIDTokenClaims,
 			logger.WithField("service", "authentication_api"),
 			baseAuthCfg.AuthenticationAPI.ExternalPrincipalsEnabled)
+	}
+	if baseAuthCfg.Providers.OIDC.IsConfigured() {
+		return NewOIDCService(ctx, *baseAuthCfg.Providers.OIDC, baseAuthCfg.OIDC, logger)
 	}
 	return NewDummyService(), nil
 }

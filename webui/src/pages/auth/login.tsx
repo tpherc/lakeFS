@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import Card from 'react-bootstrap/Card';
 import Form from 'react-bootstrap/Form';
@@ -33,6 +33,14 @@ export const withNext = (url: string, next: string) => {
     const u = new URL(url, window.location.origin);
     u.searchParams.set('next', normalizeNext(next));
     return u.toString();
+};
+
+const redirectToLoginURL = (url: string, next: string, loginCookieNames: string[] = []) => {
+    window.sessionStorage.setItem(LAKEFS_POST_LOGIN_NEXT, next);
+    loginCookieNames.forEach((cookie) => {
+        document.cookie = `${cookie}=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;`;
+    });
+    window.location.href = withNext(url, next);
 };
 
 export const getLoginIntent = (location: ReturnType<typeof useLocation>) => {
@@ -135,6 +143,19 @@ const LoginForm = ({ loginConfig }: { loginConfig: LoginConfig }) => {
                         <Button variant="primary" type="submit" className="w-100 mt-3 py-2">
                             Login
                         </Button>
+
+                        {loginConfig.login_url && loginConfig.login_url_method === 'select' ? (
+                            <Button
+                                variant="outline-secondary"
+                                type="button"
+                                className="w-100 mt-2 py-2"
+                                onClick={() => {
+                                    redirectToLoginURL(loginConfig.login_url, next, loginConfig.login_cookie_names);
+                                }}
+                            >
+                                Login with SSO
+                            </Button>
+                        ) : null}
                     </Form>
                     <div className={'mt-2 mb-1'}>
                         {loginConfig.fallback_login_url ? (
@@ -142,12 +163,12 @@ const LoginForm = ({ loginConfig }: { loginConfig: LoginConfig }) => {
                                 variant="link"
                                 className="text-secondary mt-2"
                                 onClick={async () => {
-                                    window.sessionStorage.setItem(LAKEFS_POST_LOGIN_NEXT, next);
-                                    loginConfig.login_cookie_names?.forEach((cookie) => {
-                                        document.cookie = `${cookie}=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;`;
-                                    });
                                     if (loginConfig.fallback_login_url) {
-                                        window.location.href = withNext(loginConfig.fallback_login_url, next);
+                                        redirectToLoginURL(
+                                            loginConfig.fallback_login_url,
+                                            next,
+                                            loginConfig.login_cookie_names,
+                                        );
                                     }
                                 }}
                             >
@@ -167,10 +188,29 @@ const LoginPage = () => {
     const location = useLocation();
     const { response, error, loading } = useAPI(() => setup.getState());
     const setupResponse = response as SetupResponse | null;
-    const { redirectedFromQuery, next, cleanUrl } = getLoginIntent(location);
+    const { redirected, redirectedFromQuery, next, cleanUrl } = getLoginIntent(location);
+    const loginConfig = setupResponse?.login_config;
+    const shouldRedirectToSSO = Boolean(
+        !loading &&
+        !error &&
+        setupResponse?.state === SETUP_STATE_INITIALIZED &&
+        !setupResponse.comm_prefs_missing &&
+        redirected &&
+        !redirectedFromQuery &&
+        loginConfig?.login_url &&
+        loginConfig.login_url_method === 'redirect',
+    );
 
-    // Persist next for post-login redirect
-    if (next && next.startsWith('/')) window.sessionStorage.setItem(LAKEFS_POST_LOGIN_NEXT, next);
+    useEffect(() => {
+        if (next && next.startsWith('/')) {
+            window.sessionStorage.setItem(LAKEFS_POST_LOGIN_NEXT, next);
+        }
+    }, [next]);
+
+    useEffect(() => {
+        if (!shouldRedirectToSSO || !loginConfig?.login_url) return;
+        redirectToLoginURL(loginConfig.login_url, next, loginConfig.login_cookie_names);
+    }, [loginConfig?.login_cookie_names, loginConfig?.login_url, next, shouldRedirectToSSO]);
 
     if (loading) return <Loading />;
     if (error)
@@ -181,9 +221,13 @@ const LoginPage = () => {
         return <Navigate to={{ pathname: ROUTES.SETUP, search: location.search }} replace />;
     }
 
-    if (redirectedFromQuery) return <Navigate to={cleanUrl} replace state={{ next }} />;
+    if (redirectedFromQuery) return <Navigate to={cleanUrl} replace state={{ redirected: true, next }} />;
 
-    const loginConfig = setupResponse?.login_config;
+    if (shouldRedirectToSSO) return <Loading />;
+
+    if (!loginConfig) {
+        return <AlertError error="The server did not return a login configuration." className="mt-1 w-50 m-auto" />;
+    }
 
     // Default: lakeFS login form
     return <LoginForm loginConfig={loginConfig} />;

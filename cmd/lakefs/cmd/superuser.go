@@ -11,7 +11,6 @@ import (
 	authfactory "github.com/treeverse/lakefs/pkg/auth/factory"
 	"github.com/treeverse/lakefs/pkg/auth/model"
 	"github.com/treeverse/lakefs/pkg/auth/setup"
-	"github.com/treeverse/lakefs/pkg/config"
 	"github.com/treeverse/lakefs/pkg/kv"
 	"github.com/treeverse/lakefs/pkg/kv/kvparams"
 	"github.com/treeverse/lakefs/pkg/logging"
@@ -33,7 +32,7 @@ If the wrong user or credentials were chosen it is possible to delete the user a
 		cfg := LoadConfig()
 		authUIConfig := cfg.AuthConfig().GetAuthUIConfig()
 		baseConfig := cfg.GetBaseConfig()
-		if authUIConfig.RBAC == config.AuthRBACExternal {
+		if authUIConfig.UsesExternalRBAC(baseConfig.Features.LocalRBAC) {
 			fmt.Printf("Can't create additional admin while using external auth API - auth.api.endpoint is configured.\n")
 			os.Exit(1)
 		}

@@ -253,6 +253,7 @@ var runCmd = &cobra.Command{
 			authService,
 			&oidcConfig,
 			&cookieAuthConfig,
+			api.SecureSessionCookies(cfg),
 		)
 		if err != nil {
 			logger.WithError(err).Fatal("could not initialize authenticator for S3 gateway")
@@ -337,7 +338,11 @@ var runCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		printWelcome(os.Stderr, buf.String())
-		gracefulShutdown(ctx, server)
+		shutdownServices := []Shutter{server}
+		if shutter, ok := authenticationService.(Shutter); ok {
+			shutdownServices = append(shutdownServices, shutter)
+		}
+		gracefulShutdown(ctx, shutdownServices...)
 	},
 }
 

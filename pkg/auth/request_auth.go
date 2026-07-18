@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -30,6 +31,7 @@ type OIDCConfig struct {
 	DefaultInitialGroups   []string
 	InitialGroupsClaimName string
 	FriendlyNameClaimName  string
+	EmailClaimName         string
 	PersistFriendlyName    bool
 }
 
@@ -145,11 +147,12 @@ func UserFromSAMLSession(ctx context.Context, logger logging.Logger, authService
 }
 
 func UserFromOIDCSession(ctx context.Context, logger logging.Logger, authService Service, authSession *sessions.Session, oidcConfig *OIDCConfig) (*model.User, error) {
-	idTokenClaims, ok := authSession.Values[IDTokenClaimsSessionKey].(oidcencoding.Claims)
-	if idTokenClaims == nil {
+	idTokenClaims, found, err := oidcClaimsFromSession(authSession)
+	if !found {
 		return nil, nil
 	}
-	if !ok {
+	if err != nil {
+		logger.WithError(err).Debug("failed decoding OIDC token claims")
 		return nil, ErrAuthenticatingRequest
 	}
 	externalID, ok := idTokenClaims["sub"].(string)
@@ -173,6 +176,10 @@ func UserFromOIDCSession(ctx context.Context, logger logging.Logger, authService
 	if oidcConfig.FriendlyNameClaimName != "" {
 		friendlyName, _ = idTokenClaims[oidcConfig.FriendlyNameClaimName].(string)
 	}
+	email := ""
+	if oidcConfig.EmailClaimName != "" {
+		email, _ = idTokenClaims[oidcConfig.EmailClaimName].(string)
+	}
 	user, err := authService.GetUserByExternalID(ctx, externalID)
 	if err == nil {
 		return enhanceWithFriendlyName(ctx, user, friendlyName, oidcConfig.PersistFriendlyName, authService, logger), nil
@@ -184,6 +191,9 @@ func UserFromOIDCSession(ctx context.Context, logger logging.Logger, authService
 	u := model.User{CreatedAt: time.Now().UTC(), Source: "oidc", Username: externalID, ExternalID: &externalID}
 	if oidcConfig.PersistFriendlyName {
 		u.FriendlyName = &friendlyName
+	}
+	if email != "" {
+		u.Email = &email
 	}
 	_, err = authService.CreateUser(ctx, &u)
 	if err != nil {
@@ -214,18 +224,42 @@ func UserFromOIDCSession(ctx context.Context, logger logging.Logger, authService
 	return enhanceWithFriendlyName(ctx, &u, friendlyName, false, authService, logger), nil
 }
 
+func oidcClaimsFromSession(authSession *sessions.Session) (oidcencoding.Claims, bool, error) {
+	value := authSession.Values[IDTokenClaimsSessionKey]
+	if value == nil {
+		return nil, false, nil
+	}
+	switch claims := value.(type) {
+	case oidcencoding.Claims:
+		return claims, true, nil
+	case string:
+		if claims == "" {
+			return nil, false, nil
+		}
+		var decoded oidcencoding.Claims
+		if err := json.Unmarshal([]byte(claims), &decoded); err != nil {
+			return nil, true, fmt.Errorf("decode OIDC claims: %w", err)
+		}
+		return decoded, true, nil
+	default:
+		return nil, true, fmt.Errorf("unexpected OIDC claims session value %T", value)
+	}
+}
+
 func initialGroupsFromClaims(groupsClaim any, defaultInitialGroups []string) ([]string, error) {
 	if groupsClaim == nil {
-		return defaultInitialGroups, nil
+		return append([]string(nil), defaultInitialGroups...), nil
 	}
 	groups := make([]string, 0)
+	seen := make(map[string]struct{})
 	switch v := groupsClaim.(type) {
 	case string:
 		for item := range strings.SplitSeq(v, ",") {
-			trimmed := strings.TrimSpace(item)
-			if trimmed != "" {
-				groups = append(groups, trimmed)
-			}
+			groups = appendInitialGroup(groups, seen, item)
+		}
+	case []string:
+		for _, item := range v {
+			groups = appendInitialGroup(groups, seen, item)
 		}
 	case []any:
 		for _, item := range v {
@@ -233,8 +267,22 @@ func initialGroupsFromClaims(groupsClaim any, defaultInitialGroups []string) ([]
 			if !ok {
 				return nil, fmt.Errorf("%w: initial groups must be strings", ErrInvalidFormat)
 			}
-			groups = append(groups, str)
+			groups = appendInitialGroup(groups, seen, str)
 		}
+	default:
+		return nil, fmt.Errorf("%w: initial groups claim must be a string or string array", ErrInvalidFormat)
 	}
 	return groups, nil
+}
+
+func appendInitialGroup(groups []string, seen map[string]struct{}, group string) []string {
+	trimmed := strings.TrimSpace(group)
+	if trimmed == "" {
+		return groups
+	}
+	if _, ok := seen[trimmed]; ok {
+		return groups
+	}
+	seen[trimmed] = struct{}{}
+	return append(groups, trimmed)
 }
