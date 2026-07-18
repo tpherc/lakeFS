@@ -812,6 +812,9 @@ func (a *Auth) GetLoginURLMethodConfigParam() string {
 }
 
 func (a *Auth) Validate() error {
+	if a.IsAuthenticationTypeAPI() && a.Providers.OIDC.IsConfigured() {
+		return fmt.Errorf("%w: auth.authentication_api and auth.providers.oidc are mutually exclusive", ErrBadConfiguration)
+	}
 	switch a.LoginURLMethod {
 	case "", AuthLoginURLMethodRedirect, AuthLoginURLMethodSelect:
 		if a.Providers.OIDC != nil {

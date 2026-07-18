@@ -102,6 +102,38 @@ func checkSecurityRequirements(w http.ResponseWriter,
 ) (*model.User, error) {
 	ctx := r.Context()
 	logger = logger.WithContext(ctx)
+	var firstSessionAuthErr error
+
+	rememberSessionAuthErr := func(err error) {
+		if firstSessionAuthErr == nil {
+			firstSessionAuthErr = err
+		}
+	}
+	expireSession := func(sessionName string) {
+		if err := auth.ClearSession(w, r, sessionStore, sessionName); err != nil {
+			logger.WithError(err).WithField("session_name", sessionName).Warn("failed to expire authentication session")
+		}
+	}
+	handleSessionGetErr := func(sessionName string, err error) (bool, error) {
+		if err == nil {
+			return false, nil
+		}
+		if !auth.IsSessionDecodeError(err) {
+			return false, err
+		}
+		logger.WithError(err).WithField("session_name", sessionName).Warn("authentication session decode failed")
+		rememberSessionAuthErr(err)
+		expireSession(sessionName)
+		return true, nil
+	}
+	handleSessionAuthErr := func(sessionName string, err error) bool {
+		if !errors.Is(err, auth.ErrAuthenticatingRequest) {
+			return false
+		}
+		rememberSessionAuthErr(err)
+		expireSession(sessionName)
+		return true
+	}
 
 	for _, securityRequirement := range securityRequirements {
 		for provider := range securityRequirement {
@@ -129,8 +161,12 @@ func checkSecurityRequirements(w http.ResponseWriter,
 				user, err = auth.UserByAuth(ctx, authenticator, authService, accessKey, secretKey)
 			case "cookie_auth":
 				internalAuthSession, getErr := sessionStore.Get(r, auth.InternalAuthSessionName)
-				if getErr != nil {
-					return nil, getErr
+				recovered, handleErr := handleSessionGetErr(auth.InternalAuthSessionName, getErr)
+				if handleErr != nil {
+					return nil, handleErr
+				}
+				if recovered {
+					continue
 				}
 				token := ""
 				if internalAuthSession != nil {
@@ -145,17 +181,22 @@ func checkSecurityRequirements(w http.ResponseWriter,
 				}
 			case "oidc_auth":
 				oidcSession, getErr := sessionStore.Get(r, auth.OIDCAuthSessionName)
-				if getErr != nil {
-					return nil, getErr
+				recovered, handleErr := handleSessionGetErr(auth.OIDCAuthSessionName, getErr)
+				if handleErr != nil {
+					return nil, handleErr
+				}
+				if recovered {
+					continue
 				}
 				user, err = auth.UserFromOIDCSession(ctx, logger, authService, oidcSession, oidcConfig)
-				if err == nil && user != nil && auth.SessionNeedsEncodingUpgrade(oidcSession) {
-					err = auth.SaveSession(r, w, oidcSession)
-				}
 			case "saml_auth":
 				samlSession, getErr := sessionStore.Get(r, auth.SAMLAuthSessionName)
-				if getErr != nil {
-					return nil, getErr
+				recovered, handleErr := handleSessionGetErr(auth.SAMLAuthSessionName, getErr)
+				if handleErr != nil {
+					return nil, handleErr
+				}
+				if recovered {
+					continue
 				}
 				user, err = auth.UserFromSAMLSession(ctx, logger, authService, samlSession, cookieAuthConfig)
 				if err == nil && user != nil && auth.SessionNeedsEncodingUpgrade(samlSession) {
@@ -167,6 +208,20 @@ func checkSecurityRequirements(w http.ResponseWriter,
 			}
 
 			if err != nil {
+				switch provider {
+				case "cookie_auth":
+					if handleSessionAuthErr(auth.InternalAuthSessionName, err) {
+						continue
+					}
+				case "oidc_auth":
+					if handleSessionAuthErr(auth.OIDCAuthSessionName, err) {
+						continue
+					}
+				case "saml_auth":
+					if handleSessionAuthErr(auth.SAMLAuthSessionName, err) {
+						continue
+					}
+				}
 				return nil, err
 			}
 			if user != nil {
@@ -175,6 +230,9 @@ func checkSecurityRequirements(w http.ResponseWriter,
 		}
 	}
 
+	if firstSessionAuthErr != nil {
+		return nil, firstSessionAuthErr
+	}
 	return nil, nil
 }
 

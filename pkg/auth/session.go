@@ -56,7 +56,7 @@ func NewSessionStore(sharedSecret []byte, options SessionStoreOptions) (*session
 
 func ClearSession(w http.ResponseWriter, r *http.Request, sessionStore sessions.Store, sessionName string) error {
 	session, err := sessionStore.Get(r, sessionName)
-	if err != nil && !isSessionDecodeError(err) {
+	if err != nil && !IsSessionDecodeError(err) {
 		return err
 	}
 	if session == nil {
@@ -69,7 +69,7 @@ func ClearSession(w http.ResponseWriter, r *http.Request, sessionStore sessions.
 
 func SessionForReplacement(sessionStore sessions.Store, r *http.Request, sessionName string) (*sessions.Session, error) {
 	session, err := sessionStore.Get(r, sessionName)
-	if err != nil && !isSessionDecodeError(err) {
+	if err != nil && !IsSessionDecodeError(err) {
 		return nil, err
 	}
 	if session == nil {
@@ -96,6 +96,15 @@ func SaveSession(r *http.Request, w http.ResponseWriter, session *sessions.Sessi
 	return session.Save(r, w)
 }
 
+// IsSessionDecodeError reports whether err is a recoverable secure-cookie decode failure.
+func IsSessionDecodeError(err error) bool {
+	var cookieErr securecookie.Error
+	return errors.As(err, &cookieErr) &&
+		cookieErr.IsDecode() &&
+		!cookieErr.IsUsage() &&
+		!cookieErr.IsInternal()
+}
+
 func deriveSessionKey(secret []byte, info string, size int) ([]byte, error) {
 	reader := hkdf.New(sha256.New, secret, nil, []byte(info))
 	key := make([]byte, size)
@@ -103,12 +112,4 @@ func deriveSessionKey(secret []byte, info string, size int) ([]byte, error) {
 		return nil, fmt.Errorf("derive session key: %w", err)
 	}
 	return key, nil
-}
-
-func isSessionDecodeError(err error) bool {
-	var cookieErr securecookie.Error
-	return errors.As(err, &cookieErr) &&
-		cookieErr.IsDecode() &&
-		!cookieErr.IsUsage() &&
-		!cookieErr.IsInternal()
 }

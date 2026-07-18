@@ -124,6 +124,7 @@ func (s *oidcSession) SaveClaims(claims encoding.Claims) error {
 		return fmt.Errorf("%w: normalized OIDC claims exceed %d bytes", ErrInvalidRequest, oidcClaimsMaxJSONSize)
 	}
 	s.session.Values[auth.IDTokenClaimsSessionKey] = string(data)
+	auth.MarkOIDCSessionClaimsCurrent(s.session)
 	clearOIDCTransactionValue(s.session)
 	return s.Save()
 }
