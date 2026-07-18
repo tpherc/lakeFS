@@ -309,6 +309,42 @@ func TestUserFromOIDCSessionRollsBackUserAfterInitialGroupFailure(t *testing.T) 
 	require.ErrorIs(t, getErr, ErrNotFound)
 }
 
+func TestUserFromSAMLSessionUsesFallbackSourceAndAssignsInitialGroups(t *testing.T) {
+	authService := newOIDCSessionAuthService()
+	session := &sessions.Session{Values: map[interface{}]interface{}{
+		SAMLTokenClaimsSessionKey: oidcencoding.Claims{
+			"external_id": "sam-user",
+			"name":        "Sam User",
+			"roles":       []any{"Developers", "Viewers"},
+			"department":  "Data",
+		},
+	}}
+
+	user, err := UserFromSAMLSession(t.Context(), logging.ContextUnavailable(), authService, session, &CookieAuthConfig{
+		ValidateIDTokenClaims:   map[string]string{"department": "Data"},
+		InitialGroupsClaimName:  "roles",
+		FriendlyNameClaimName:   "name",
+		ExternalUserIDClaimName: "external_id",
+		PersistFriendlyName:     true,
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, "sam-user", user.Username)
+	require.Equal(t, "saml", user.Source)
+	require.Equal(t, "sam-user", stringValue(user.ExternalID))
+	require.Equal(t, "Sam User", stringValue(user.FriendlyName))
+
+	require.Len(t, authService.createdUsers, 1)
+	created := authService.createdUsers[0]
+	require.Equal(t, "sam-user", created.Username)
+	require.Equal(t, "saml", created.Source)
+	require.Equal(t, "Sam User", stringValue(created.FriendlyName))
+	require.Equal(t, []oidcGroupMembership{
+		{username: "sam-user", groupID: "Developers"},
+		{username: "sam-user", groupID: "Viewers"},
+	}, authService.addedGroups)
+}
+
 func cloneUser(user *model.User) *model.User {
 	if user == nil {
 		return nil

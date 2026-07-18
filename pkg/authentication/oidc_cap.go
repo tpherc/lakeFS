@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -29,13 +30,15 @@ type oidcCallbackInput struct {
 type oidcProtocolClient interface {
 	BeginLogin(context.Context, oidcBeginLoginInput) (*oidcTransaction, string, error)
 	Exchange(context.Context, *oidcTransaction, oidcCallbackInput) (encoding.Claims, error)
+	EndSessionEndpoint() string
 	Close()
 }
 
 type capOIDCClient struct {
-	provider        *capoidc.Provider
-	authorizeMaxAge *uint
-	authorizeParams map[string]string
+	provider           *capoidc.Provider
+	authorizeMaxAge    *uint
+	authorizeParams    map[string]string
+	endSessionEndpoint string
 }
 
 func newCAPOIDCClient(ctx context.Context, providerConfig config.OIDCProvider) (*capOIDCClient, error) {
@@ -56,10 +59,16 @@ func newCAPOIDCClient(ctx context.Context, providerConfig config.OIDCProvider) (
 	if err != nil {
 		return nil, fmt.Errorf("initialize OIDC provider: %w", err)
 	}
+	endSessionEndpoint, err := providerEndSessionEndpoint(provider)
+	if err != nil {
+		provider.Done()
+		return nil, err
+	}
 	return &capOIDCClient{
-		provider:        provider,
-		authorizeMaxAge: maxAge,
-		authorizeParams: authorizeParams,
+		provider:           provider,
+		authorizeMaxAge:    maxAge,
+		authorizeParams:    authorizeParams,
+		endSessionEndpoint: endSessionEndpoint,
 	}, nil
 }
 
@@ -93,6 +102,10 @@ func (c *capOIDCClient) Exchange(ctx context.Context, transaction *oidcTransacti
 		return nil, err
 	}
 	return claims, nil
+}
+
+func (c *capOIDCClient) EndSessionEndpoint() string {
+	return c.endSessionEndpoint
 }
 
 func (c *capOIDCClient) Close() {
@@ -201,6 +214,42 @@ func addAuthorizeEndpointQueryParameters(authURL string, params map[string]strin
 		query.Set(key, value)
 	}
 	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
+}
+
+func providerEndSessionEndpoint(provider *capoidc.Provider) (string, error) {
+	var metadata struct {
+		EndSessionEndpoint string `json:"end_session_endpoint"`
+	}
+	if err := provider.Claims(&metadata); err != nil {
+		return "", fmt.Errorf("read OIDC provider discovery claims: %w", err)
+	}
+	return normalizeEndSessionEndpoint(metadata.EndSessionEndpoint)
+}
+
+func normalizeEndSessionEndpoint(raw string) (string, error) {
+	endpoint := strings.TrimSpace(raw)
+	if endpoint == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("parse OIDC end_session_endpoint: %w", err)
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("OIDC end_session_endpoint scheme must be http or https")
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("OIDC end_session_endpoint must include a host")
+	}
+	if parsed.User != nil {
+		return "", fmt.Errorf("OIDC end_session_endpoint must not include user info")
+	}
+	if parsed.Fragment != "" {
+		return "", fmt.Errorf("OIDC end_session_endpoint must not include a fragment")
+	}
+	parsed.Host = strings.ToLower(parsed.Host)
 	return parsed.String(), nil
 }
 

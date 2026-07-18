@@ -2,6 +2,7 @@ package authentication
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -27,6 +28,7 @@ type OIDCService struct {
 	callbacks            oidcCallbackResolver
 	userClaimsConfig     config.OIDC
 	postLoginRedirectURL string
+	logoutRedirect       oidcLogoutRedirect
 	logger               logging.Logger
 }
 
@@ -45,6 +47,7 @@ func NewOIDCService(ctx context.Context, providerConfig config.OIDCProvider, use
 		callbacks:            callbacks,
 		userClaimsConfig:     userClaimsConfig,
 		postLoginRedirectURL: providerConfig.PostLoginRedirectURL,
+		logoutRedirect:       newOIDCLogoutRedirect(providerConfig, oidcClient.EndSessionEndpoint()),
 		logger:               logger.WithField("service", "oidc_authentication"),
 	}, nil
 }
@@ -64,6 +67,10 @@ func (s *OIDCService) ExternalPrincipalLogin(_ context.Context, _ map[string]any
 
 func (s *OIDCService) ValidateSTS(_ context.Context, _, _, _ string) (string, error) {
 	return "", ErrNotImplemented
+}
+
+func (s *OIDCService) LogoutRedirectURL(_ context.Context, fallbackURL string) (string, error) {
+	return s.logoutRedirect.URL(fallbackURL)
 }
 
 func (s *OIDCService) RegisterAdditionalRoutes(r *chi.Mux, sessionStore sessions.Store) {
@@ -143,8 +150,8 @@ func (s *OIDCService) OauthCallback(w http.ResponseWriter, r *http.Request, sess
 
 func (s *OIDCService) loginHandler(sessionStore sessions.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := auth.ClearSession(w, r, sessionStore, auth.InternalAuthSessionName); err != nil {
-			s.logger.WithError(err).Error("failed to clear internal auth session")
+		if err := s.clearLoginSessions(w, r, sessionStore); err != nil {
+			s.logger.WithError(err).Error("failed to clear existing auth sessions")
 			http.Error(w, "failed to prepare OIDC login", http.StatusInternalServerError)
 			return
 		}
@@ -173,6 +180,17 @@ func (s *OIDCService) loginHandler(sessionStore sessions.Store) http.HandlerFunc
 		}
 		http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
 	}
+}
+
+func (s *OIDCService) clearLoginSessions(w http.ResponseWriter, r *http.Request, sessionStore sessions.Store) error {
+	var errs []error
+	for _, sessionName := range []string{auth.InternalAuthSessionName, auth.SAMLAuthSessionName} {
+		if err := auth.ClearSession(w, r, sessionStore, sessionName); err != nil {
+			s.logger.WithError(err).WithField("session", sessionName).Error("failed to clear auth session before OIDC login")
+			errs = append(errs, fmt.Errorf("%s: %w", sessionName, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (s *OIDCService) postLoginTarget(next string) string {

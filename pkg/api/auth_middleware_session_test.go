@@ -31,7 +31,7 @@ func TestOIDCSessionReissueOnlyWhenEncodingUpgradeNeeded(t *testing.T) {
 		{"oidc_auth": []string{}},
 	}
 
-	t.Run("legacy valid cookie reissues once", func(t *testing.T) {
+	t.Run("historical OIDC cookie is rejected and expired", func(t *testing.T) {
 		legacyStore := sessions.NewCookieStore(secret)
 		req := httptest.NewRequest(http.MethodGet, "https://lakefs.example/api/v1/repositories", nil)
 		rec := httptest.NewRecorder()
@@ -49,14 +49,14 @@ func TestOIDCSessionReissueOnlyWhenEncodingUpgradeNeeded(t *testing.T) {
 		gotRec := httptest.NewRecorder()
 
 		user, err := checkSecurityRequirements(gotRec, gotReq, securityRequirements, logging.ContextUnavailable(), nil, authService, store, &auth.OIDCConfig{}, nil)
-		if err != nil {
-			t.Fatal(err)
+		if err == nil {
+			t.Fatal("expected historical OIDC cookie to fail authentication")
 		}
-		if user == nil || user.Username != externalID {
+		if user != nil {
 			t.Fatalf("unexpected user: %#v", user)
 		}
 		if responseCookieByName(t, gotRec.Result(), auth.OIDCAuthSessionName) == nil {
-			t.Fatal("expected legacy OIDC cookie to be reissued")
+			t.Fatal("expected historical OIDC cookie to be expired")
 		}
 	})
 
@@ -68,6 +68,7 @@ func TestOIDCSessionReissueOnlyWhenEncodingUpgradeNeeded(t *testing.T) {
 			t.Fatal(err)
 		}
 		session.Values[auth.IDTokenClaimsSessionKey] = `{"sub":"oidc-user"}`
+		auth.MarkOIDCSessionClaimsCurrent(session)
 		if err := auth.SaveSession(req, rec, session); err != nil {
 			t.Fatal(err)
 		}

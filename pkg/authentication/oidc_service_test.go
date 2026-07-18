@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,6 +57,10 @@ func TestOIDCLoginUsesProtocolClientAndSavesTransaction(t *testing.T) {
 	require.Equal(t, "https://idp.example/authorize?state=state-1", rec.Header().Get("Location"))
 	require.Equal(t, 1, fakeClient.beginCalls)
 
+	setCookie := strings.Join(rec.Header().Values("Set-Cookie"), "\n")
+	require.Contains(t, setCookie, auth.InternalAuthSessionName+"=")
+	require.Contains(t, setCookie, auth.SAMLAuthSessionName+"=")
+
 	sessionReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/api/v1/oidc/callback", nil)
 	for _, cookie := range latestCookies(rec.Result()) {
 		sessionReq.AddCookie(cookie)
@@ -66,6 +71,25 @@ func TestOIDCLoginUsesProtocolClientAndSavesTransaction(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "state-1", transaction.StateValue)
 	require.Equal(t, "/repositories", transaction.Next)
+}
+
+func TestOIDCLoginStopsWhenExistingSessionCleanupFails(t *testing.T) {
+	store := &recordingSessionStore{
+		getErrors: map[string]error{
+			auth.SAMLAuthSessionName: errors.New("saml store failure"),
+		},
+	}
+	fakeClient := &fakeOIDCClient{}
+	service := testOIDCService(fakeClient, config.OIDC{})
+
+	req := httptest.NewRequest(http.MethodGet, "https://lakefs.example/oidc/login?next=/repositories", nil)
+	rec := httptest.NewRecorder()
+	service.loginHandler(store).ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.Equal(t, 0, fakeClient.beginCalls)
+	require.Equal(t, []string{auth.InternalAuthSessionName, auth.SAMLAuthSessionName}, store.gets)
+	require.Equal(t, []string{auth.InternalAuthSessionName}, store.saves)
 }
 
 func TestOIDCCallbackConsumesTransactionBeforeExchangeAndStoresNormalizedClaims(t *testing.T) {
@@ -218,11 +242,12 @@ func sampleOIDCTransaction(redirectURI, next string) *oidcTransaction {
 }
 
 type fakeOIDCClient struct {
-	beginFunc     func(context.Context, oidcBeginLoginInput) (*oidcTransaction, string, error)
-	exchangeFunc  func(context.Context, *oidcTransaction, oidcCallbackInput) (encoding.Claims, error)
-	beginCalls    int
-	exchangeCalls int
-	closeCalled   bool
+	beginFunc          func(context.Context, oidcBeginLoginInput) (*oidcTransaction, string, error)
+	exchangeFunc       func(context.Context, *oidcTransaction, oidcCallbackInput) (encoding.Claims, error)
+	endSessionEndpoint string
+	beginCalls         int
+	exchangeCalls      int
+	closeCalled        bool
 }
 
 func (f *fakeOIDCClient) BeginLogin(ctx context.Context, input oidcBeginLoginInput) (*oidcTransaction, string, error) {
@@ -241,6 +266,38 @@ func (f *fakeOIDCClient) Exchange(ctx context.Context, transaction *oidcTransact
 	return f.exchangeFunc(ctx, transaction, input)
 }
 
+func (f *fakeOIDCClient) EndSessionEndpoint() string {
+	return f.endSessionEndpoint
+}
+
 func (f *fakeOIDCClient) Close() {
 	f.closeCalled = true
+}
+
+type recordingSessionStore struct {
+	getErrors  map[string]error
+	saveErrors map[string]error
+	gets       []string
+	saves      []string
+}
+
+func (s *recordingSessionStore) Get(_ *http.Request, name string) (*sessions.Session, error) {
+	s.gets = append(s.gets, name)
+	if err := s.getErrors[name]; err != nil {
+		return nil, err
+	}
+	return sessions.NewSession(s, name), nil
+}
+
+func (s *recordingSessionStore) New(r *http.Request, name string) (*sessions.Session, error) {
+	return s.Get(r, name)
+}
+
+func (s *recordingSessionStore) Save(_ *http.Request, _ http.ResponseWriter, session *sessions.Session) error {
+	name := session.Name()
+	s.saves = append(s.saves, name)
+	if err := s.saveErrors[name]; err != nil {
+		return err
+	}
+	return nil
 }

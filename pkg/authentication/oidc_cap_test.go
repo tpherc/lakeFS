@@ -103,6 +103,33 @@ func TestCAPOIDCClientExchangesVerifiedCode(t *testing.T) {
 	require.Equal(t, "alice@example.com", claims["sub"])
 }
 
+func TestCAPOIDCClientDiscoversEndSessionEndpoint(t *testing.T) {
+	const (
+		clientID     = "lakefs"
+		clientSecret = "secret"
+		callbackBase = "http://127.0.0.1:8000"
+		callbackURL  = callbackBase + "/api/v1/oidc/callback"
+	)
+	testProvider := capoidc.StartTestProvider(t, capoidc.WithNoTLS())
+	testProvider.SetClientCreds(clientID, clientSecret)
+	testProvider.SetSupportedScopes("openid", "profile")
+	testProvider.SetAllowedRedirectURIs([]string{callbackURL})
+	testProvider.SetAdditionalConfiguration(map[string]interface{}{
+		"end_session_endpoint": " HTTPS://IDP.EXAMPLE.COM/logout?existing=true ",
+	})
+
+	client, err := newCAPOIDCClient(context.Background(), config.OIDCProvider{
+		URL:             testProvider.Addr(),
+		ClientID:        clientID,
+		ClientSecret:    config.SecureString(clientSecret),
+		CallbackBaseURL: callbackBase,
+	})
+	require.NoError(t, err)
+	t.Cleanup(client.Close)
+
+	require.Equal(t, "https://idp.example.com/logout?existing=true", client.EndSessionEndpoint())
+}
+
 func TestSupportedOIDCSigningAlgs(t *testing.T) {
 	require.Equal(t, []capoidc.Alg{
 		capoidc.RS256,

@@ -103,7 +103,7 @@ func Serve(
 	r.Mount("/_pprof/", httputil.ServePPROF("/_pprof/"))
 	r.Mount("/openapi.json", http.HandlerFunc(swaggerSpecHandler))
 	r.Mount(apiutil.BaseURL, http.HandlerFunc(InvalidAPIEndpointHandler))
-	logoutHandler := NewLogoutHandler(sessionStore, logger, baseAuthConfig)
+	logoutHandler := NewLogoutHandler(sessionStore, logger, baseAuthConfig, authenticationService)
 	r.Mount("/logout", logoutHandler)
 	if baseAuthConfig.Providers.OIDC.IsConfigured() {
 		r.Mount("/oidc/logout", logoutHandler)

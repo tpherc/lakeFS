@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,18 +16,12 @@ import (
 )
 
 func TestLogoutHandlerClearsSessionsAndRedirectsToOIDCProviderLogout(t *testing.T) {
-	authConfig := &config.BaseAuth{LogoutRedirectURL: "https://idp.example.com/logout"}
-	authConfig.Providers.OIDC = &config.OIDCProvider{
-		ClientID:                     "lakefs-client",
-		LogoutClientIDQueryParameter: "client_id",
-		LogoutEndpointQueryParameters: []string{
-			"returnTo", "https://lakefs.example.com/oidc/login",
-		},
-	}
+	authConfig := &config.BaseAuth{LogoutRedirectURL: "/auth/login"}
 	handler := NewLogoutHandler(
 		testSessionStore(t),
 		logging.ContextUnavailable(),
 		authConfig,
+		staticLogoutRedirectResolver{url: "https://idp.example.com/logout?client_id=lakefs-client&returnTo=https%3A%2F%2Flakefs.example.com%2Foidc%2Flogin"},
 	)
 
 	recorder := httptest.NewRecorder()
@@ -48,102 +44,136 @@ func TestLogoutHandlerClearsSessionsAndRedirectsToOIDCProviderLogout(t *testing.
 	}
 }
 
-func TestOIDCLogoutRedirectURL(t *testing.T) {
-	tests := []struct {
-		name              string
-		logoutRedirectURL string
-		provider          *config.OIDCProvider
-		wantURL           string
-		wantQuery         map[string]string
-		wantErr           bool
-	}{
-		{
-			name:              "no OIDC logout parameters",
-			logoutRedirectURL: "/auth/login",
-			provider:          &config.OIDCProvider{},
-			wantURL:           "/auth/login",
-		},
-		{
-			name:              "adds provider logout query parameters",
-			logoutRedirectURL: "https://idp.example.com/logout?existing=true",
-			provider: &config.OIDCProvider{
-				ClientID:                     "lakefs-client",
-				LogoutClientIDQueryParameter: "client_id",
-				LogoutEndpointQueryParameters: []string{
-					"returnTo", "https://lakefs.example.com/oidc/login",
-				},
-			},
-			wantURL: "https://idp.example.com/logout",
-			wantQuery: map[string]string{
-				"client_id": "lakefs-client",
-				"existing":  "true",
-				"returnTo":  "https://lakefs.example.com/oidc/login",
-			},
-		},
-		{
-			name:              "trims provider logout query parameter keys",
-			logoutRedirectURL: "https://idp.example.com/logout",
-			provider: &config.OIDCProvider{
-				ClientID:                     "lakefs-client",
-				LogoutClientIDQueryParameter: " client_id ",
-				LogoutEndpointQueryParameters: []string{
-					" returnTo ", "https://lakefs.example.com/oidc/login",
-				},
-			},
-			wantURL: "https://idp.example.com/logout",
-			wantQuery: map[string]string{
-				"client_id": "lakefs-client",
-				"returnTo":  "https://lakefs.example.com/oidc/login",
-			},
-		},
-		{
-			name:              "rejects unmatched query parameter list",
-			logoutRedirectURL: "https://idp.example.com/logout",
-			provider: &config.OIDCProvider{
-				LogoutEndpointQueryParameters: []string{"returnTo"},
-			},
-			wantErr: true,
-		},
-		{
-			name:              "rejects empty query parameter key",
-			logoutRedirectURL: "https://idp.example.com/logout",
-			provider: &config.OIDCProvider{
-				LogoutEndpointQueryParameters: []string{"", "https://lakefs.example.com/oidc/login"},
-			},
-			wantErr: true,
+func TestLogoutHandlerAttemptsAllSessionClears(t *testing.T) {
+	store := &recordingSessionStore{
+		getErrors: map[string]error{
+			auth.InternalAuthSessionName: errors.New("internal store failure"),
 		},
 	}
+	handler := NewLogoutHandler(
+		store,
+		logging.ContextUnavailable(),
+		&config.BaseAuth{LogoutRedirectURL: "/auth/login"},
+		nil,
+	)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := oidcLogoutRedirectURL(tt.logoutRedirectURL, tt.provider)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			assertURL(t, got, tt.wantURL, tt.wantQuery)
-		})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/logout", nil)
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("unexpected status: got %d, want %d", recorder.Code, http.StatusTemporaryRedirect)
+	}
+	assertEqualStrings(t, store.gets, []string{
+		auth.InternalAuthSessionName,
+		auth.OIDCAuthSessionName,
+		auth.SAMLAuthSessionName,
+	})
+	assertEqualStrings(t, store.saves, []string{
+		auth.OIDCAuthSessionName,
+		auth.SAMLAuthSessionName,
+	})
+}
+
+func TestLogoutHandlerFailsOnlyWhenAllSessionClearsFail(t *testing.T) {
+	store := &recordingSessionStore{
+		getErrors: map[string]error{
+			auth.InternalAuthSessionName: errors.New("internal store failure"),
+			auth.OIDCAuthSessionName:     errors.New("oidc store failure"),
+			auth.SAMLAuthSessionName:     errors.New("saml store failure"),
+		},
+	}
+	handler := NewLogoutHandler(
+		store,
+		logging.ContextUnavailable(),
+		&config.BaseAuth{LogoutRedirectURL: "/auth/login"},
+		nil,
+	)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/logout", nil)
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("unexpected status: got %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+	assertEqualStrings(t, store.gets, []string{
+		auth.InternalAuthSessionName,
+		auth.OIDCAuthSessionName,
+		auth.SAMLAuthSessionName,
+	})
+}
+
+func TestResolveLogoutRedirectURLUsesResolver(t *testing.T) {
+	authConfig := &config.BaseAuth{LogoutRedirectURL: "/auth/login"}
+
+	got, err := resolveLogoutRedirectURL(context.Background(), authConfig, staticLogoutRedirectResolver{url: "https://idp.example.com/logout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "https://idp.example.com/logout" {
+		t.Fatalf("unexpected logout redirect URL: got %q", got)
 	}
 }
 
-func TestResolveLogoutRedirectURLIgnoresUnconfiguredOIDCProvider(t *testing.T) {
+func TestResolveLogoutRedirectURLReturnsFallbackWithoutResolver(t *testing.T) {
 	authConfig := &config.BaseAuth{LogoutRedirectURL: "/auth/login"}
-	authConfig.Providers.OIDC = &config.OIDCProvider{
-		LogoutEndpointQueryParameters: []string{"returnTo", "https://lakefs.example.com/oidc/login"},
-	}
 
-	got, err := resolveLogoutRedirectURL(authConfig)
+	got, err := resolveLogoutRedirectURL(context.Background(), authConfig, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != "/auth/login" {
 		t.Fatalf("unexpected logout redirect URL: got %q, want /auth/login", got)
 	}
+}
+
+func assertEqualStrings(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("unexpected length: got %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected strings: got %v, want %v", got, want)
+		}
+	}
+}
+
+type staticLogoutRedirectResolver struct {
+	url string
+}
+
+func (r staticLogoutRedirectResolver) LogoutRedirectURL(_ context.Context, _ string) (string, error) {
+	return r.url, nil
+}
+
+type recordingSessionStore struct {
+	getErrors  map[string]error
+	saveErrors map[string]error
+	gets       []string
+	saves      []string
+}
+
+func (s *recordingSessionStore) Get(_ *http.Request, name string) (*sessions.Session, error) {
+	s.gets = append(s.gets, name)
+	if err := s.getErrors[name]; err != nil {
+		return nil, err
+	}
+	return sessions.NewSession(s, name), nil
+}
+
+func (s *recordingSessionStore) New(r *http.Request, name string) (*sessions.Session, error) {
+	return s.Get(r, name)
+}
+
+func (s *recordingSessionStore) Save(_ *http.Request, _ http.ResponseWriter, session *sessions.Session) error {
+	name := session.Name()
+	s.saves = append(s.saves, name)
+	if err := s.saveErrors[name]; err != nil {
+		return err
+	}
+	return nil
 }
 
 func assertURL(t *testing.T, got, wantURL string, wantQuery map[string]string) {

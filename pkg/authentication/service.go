@@ -21,6 +21,7 @@ type Service interface {
 	ExternalPrincipalLogin(ctx context.Context, identityRequest map[string]any) (*apiclient.ExternalPrincipal, error)
 	// ValidateSTS validates the STS parameters and returns the external user ID
 	ValidateSTS(ctx context.Context, code, redirectURI, state string) (string, error)
+	LogoutRedirectURL(ctx context.Context, fallbackURL string) (string, error)
 	RegisterAdditionalRoutes(r *chi.Mux, sessionStore sessions.Store)
 	OauthCallback(w http.ResponseWriter, r *http.Request, sessionStore sessions.Store)
 }
@@ -41,6 +42,10 @@ func (d DummyService) ExternalPrincipalLogin(_ context.Context, _ map[string]any
 
 func (d DummyService) IsExternalPrincipalsEnabled() bool {
 	return false
+}
+
+func (d DummyService) LogoutRedirectURL(_ context.Context, fallbackURL string) (string, error) {
+	return fallbackURL, nil
 }
 
 func (d DummyService) RegisterAdditionalRoutes(_ *chi.Mux, _ sessions.Store) {}
@@ -151,6 +156,10 @@ func (s *APIService) ExternalPrincipalLogin(ctx context.Context, identityRequest
 
 func (s *APIService) IsExternalPrincipalsEnabled() bool {
 	return s.externalPrincipalsEnabled
+}
+
+func (s *APIService) LogoutRedirectURL(_ context.Context, fallbackURL string) (string, error) {
+	return fallbackURL, nil
 }
 
 func (s *APIService) RegisterAdditionalRoutes(_ *chi.Mux, _ sessions.Store) {

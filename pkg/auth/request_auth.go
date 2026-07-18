@@ -6,9 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
-	"github.com/go-openapi/swag"
 	"github.com/gorilla/sessions"
 	"github.com/treeverse/lakefs/pkg/auth/model"
 	oidcencoding "github.com/treeverse/lakefs/pkg/auth/oidc/encoding"
@@ -25,6 +23,7 @@ const (
 
 	oidcClaimsSchemaVersionSessionKey = "_lakefs_oidc_claims_schema_version"
 	currentOIDCClaimsSchemaVersion    = 1
+	defaultSAMLAuthSource             = "saml"
 )
 
 var ErrInvalidFormat = errors.New("invalid format")
@@ -46,23 +45,6 @@ type CookieAuthConfig struct {
 	ExternalUserIDClaimName string
 	AuthSource              string
 	PersistFriendlyName     bool
-}
-
-func enhanceWithFriendlyName(ctx context.Context, user *model.User, friendlyName string, persistFriendlyName bool, authService Service, logger logging.Logger) *model.User {
-	log := logger.WithFields(logging.Fields{"friendly_name": friendlyName, "persist_friendly_name": persistFriendlyName})
-	if user == nil {
-		log.Error("user is nil")
-		return nil
-	}
-	if swag.StringValue(user.FriendlyName) != friendlyName {
-		user.FriendlyName = swag.String(friendlyName)
-		if persistFriendlyName {
-			if err := authService.UpdateUserFriendlyName(ctx, user.Username, friendlyName); err != nil {
-				log.WithError(err).Error("failed to update user friendly name")
-			}
-		}
-	}
-	return user
 }
 
 func UserFromSAMLSession(ctx context.Context, logger logging.Logger, authService Service, authSession *sessions.Session, cookieAuthConfig *CookieAuthConfig) (*model.User, error) {
@@ -104,41 +86,23 @@ func UserFromSAMLSession(ctx context.Context, logger logging.Logger, authService
 	}
 	log = log.WithField("friendly_name", friendlyName)
 
-	user, err := authService.GetUserByExternalID(ctx, externalID)
-	if err == nil {
-		log.Info("Found user")
-		return enhanceWithFriendlyName(ctx, user, friendlyName, cookieAuthConfig.PersistFriendlyName, authService, logger), nil
-	}
-	if !errors.Is(err, ErrNotFound) {
-		log.WithError(err).Error("Failed while searching if user exists in database")
-		return nil, fmt.Errorf("get user by external ID: %w", err)
-	}
-	log.Info("User not found; creating them")
-
 	groupsClaim := idTokenClaims[cookieAuthConfig.InitialGroupsClaimName]
 	initialGroups, err := initialGroupsFromClaims(groupsClaim, cookieAuthConfig.DefaultInitialGroups)
 	if err != nil {
 		log.WithError(err).WithField("groups_claim", groupsClaim).Error("Failed to parse initial groups claim")
 		return nil, ErrAuthenticatingRequest
 	}
-	u := model.User{CreatedAt: time.Now().UTC(), Source: cookieAuthConfig.AuthSource, Username: externalID, ExternalID: &externalID}
-	if cookieAuthConfig.PersistFriendlyName {
-		u.FriendlyName = &friendlyName
-	}
-	if err := createUserWithInitialGroups(ctx, logger, authService, &u, initialGroups); err != nil {
-		if !errors.Is(err, ErrAlreadyExists) {
-			log.WithError(err).Error("Failed to provision external user")
-			return nil, err
-		}
-		user, err = authService.GetUserByExternalID(ctx, externalID)
-		if err != nil {
-			log.WithError(err).Error("Failed to get external user from database")
-			return nil, fmt.Errorf("get user by external ID: %w", err)
-		}
-		return enhanceWithFriendlyName(ctx, user, friendlyName, cookieAuthConfig.PersistFriendlyName, authService, logger), nil
-	}
 
-	return enhanceWithFriendlyName(ctx, &u, friendlyName, false, authService, logger), nil
+	authSource := strings.TrimSpace(cookieAuthConfig.AuthSource)
+	if authSource == "" {
+		authSource = defaultSAMLAuthSource
+	}
+	return ResolveOrProvisionExternalUser(ctx, logger, authService, ExternalIdentity{
+		ExternalID:    externalID,
+		Source:        authSource,
+		FriendlyName:  friendlyName,
+		InitialGroups: initialGroups,
+	}, ExternalIdentityProvisioningOptions{PersistFriendlyName: cookieAuthConfig.PersistFriendlyName})
 }
 
 func UserFromOIDCSession(ctx context.Context, logger logging.Logger, authService Service, authSession *sessions.Session, oidcConfig *OIDCConfig) (*model.User, error) {
@@ -175,41 +139,20 @@ func UserFromOIDCSession(ctx context.Context, logger logging.Logger, authService
 	if oidcConfig.EmailClaimName != "" {
 		email, _ = idTokenClaims[oidcConfig.EmailClaimName].(string)
 	}
-	user, err := authService.GetUserByExternalID(ctx, externalID)
-	if err == nil {
-		return enhanceWithFriendlyName(ctx, user, friendlyName, oidcConfig.PersistFriendlyName, authService, logger), nil
-	}
-	if !errors.Is(err, ErrNotFound) {
-		logger.WithError(err).Error("Failed to get external user from database")
-		return nil, fmt.Errorf("get user by external ID: %w", err)
-	}
 	groupsClaim := idTokenClaims[oidcConfig.InitialGroupsClaimName]
 	initialGroups, err := initialGroupsFromClaims(groupsClaim, oidcConfig.DefaultInitialGroups)
 	if err != nil {
 		logger.WithError(err).WithField("groups_claim", groupsClaim).Error("Failed to parse initial groups claim")
 		return nil, ErrAuthenticatingRequest
 	}
-	u := model.User{CreatedAt: time.Now().UTC(), Source: "oidc", Username: externalID, ExternalID: &externalID}
-	if oidcConfig.PersistFriendlyName {
-		u.FriendlyName = &friendlyName
-	}
-	if email != "" {
-		u.Email = &email
-	}
-	if err := createUserWithInitialGroups(ctx, logger, authService, &u, initialGroups); err != nil {
-		if !errors.Is(err, ErrAlreadyExists) {
-			logger.WithError(err).Error("Failed to provision external user")
-			return nil, err
-		}
-		user, err = authService.GetUserByExternalID(ctx, externalID)
-		if err != nil {
-			logger.WithError(err).Error("Failed to get external user from database")
-			return nil, fmt.Errorf("get user by external ID: %w", err)
-		}
-		return enhanceWithFriendlyName(ctx, user, friendlyName, oidcConfig.PersistFriendlyName, authService, logger), nil
-	}
 
-	return enhanceWithFriendlyName(ctx, &u, friendlyName, false, authService, logger), nil
+	return ResolveOrProvisionExternalUser(ctx, logger, authService, ExternalIdentity{
+		ExternalID:    externalID,
+		Source:        "oidc",
+		FriendlyName:  friendlyName,
+		Email:         email,
+		InitialGroups: initialGroups,
+	}, ExternalIdentityProvisioningOptions{PersistFriendlyName: oidcConfig.PersistFriendlyName})
 }
 
 // MarkOIDCSessionClaimsCurrent marks claims saved by the current normalized OIDC callback schema.
@@ -244,28 +187,6 @@ func oidcClaimsFromSession(authSession *sessions.Session) (oidcencoding.Claims, 
 func oidcSessionClaimsCurrent(session *sessions.Session) bool {
 	version, ok := session.Values[oidcClaimsSchemaVersionSessionKey].(int)
 	return ok && version == currentOIDCClaimsSchemaVersion
-}
-
-func createUserWithInitialGroups(ctx context.Context, logger logging.Logger, authService Service, user *model.User, initialGroups []string) error {
-	if _, err := authService.CreateUser(ctx, user); err != nil {
-		return fmt.Errorf("create user: %w", err)
-	}
-	for _, groupName := range initialGroups {
-		if err := authService.AddUserToGroup(ctx, user.Username, groupName); err != nil {
-			if errors.Is(err, ErrAlreadyExists) {
-				continue
-			}
-			logger.WithError(err).WithFields(logging.Fields{"group": groupName, "user": user.Username}).Error("Failed to add external user to group")
-			if deleteErr := authService.DeleteUser(ctx, user.Username); deleteErr != nil {
-				return errors.Join(
-					fmt.Errorf("add user to initial group %q: %w", groupName, err),
-					fmt.Errorf("rollback created user %q: %w", user.Username, deleteErr),
-				)
-			}
-			return fmt.Errorf("add user to initial group %q: %w", groupName, err)
-		}
-	}
-	return nil
 }
 
 func initialGroupsFromClaims(groupsClaim any, defaultInitialGroups []string) ([]string, error) {
