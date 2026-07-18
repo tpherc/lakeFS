@@ -8,11 +8,18 @@ import Accordion from 'react-bootstrap/Accordion';
 const DEFAULT_BLOCKSTORE_EXAMPLE = 'e.g. s3://example-bucket/';
 const DEFAULT_BLOCKSTORE_VALIDITY_REGEX = new RegExp(`^s3://`);
 
-export const RepositoryCreateForm = ({ formID, config, onSubmit, formValid, setFormValid, error = null }) => {
+export const RepositoryCreateForm = ({ formID, config, configs, onSubmit, formValid, setFormValid, error = null }) => {
     const repoValidityRegex = /^[a-z0-9][a-z0-9-]{2,62}$/;
+    const storageConfigs = configs?.length ? configs : config ? [config] : [];
+    const [selectedStorageID, setSelectedStorageID] = useState(storageConfigs[0]?.blockstore_id || '');
+    const selectedConfig =
+        storageConfigs.find((storageConfig) => storageConfig.blockstore_id === selectedStorageID) ||
+        storageConfigs[0] ||
+        {};
+    const multiStorage = storageConfigs.length > 1;
 
     const [repoValid, setRepoValid] = useState(null);
-    const defaultNamespacePrefix = config.default_namespace_prefix;
+    const defaultNamespacePrefix = selectedConfig.default_namespace_prefix;
 
     const [storageNamespaceValid, setStorageNamespaceValid] = useState(defaultNamespacePrefix ? true : null);
     const [defaultBranchValid, setDefaultBranchValid] = useState(true);
@@ -46,18 +53,29 @@ export const RepositoryCreateForm = ({ formID, config, onSubmit, formValid, setF
         setFormValid(isBranchValid && storageNamespaceValid && repoValid);
     };
 
-    const storageType = config.blockstore_type;
-    const storageNamespaceValidityRegexStr = config
-        ? config.blockstore_namespace_ValidityRegex
-        : DEFAULT_BLOCKSTORE_VALIDITY_REGEX;
+    const onStorageChange = (ev) => {
+        setSelectedStorageID(ev.target.value);
+        setStorageNamespaceValid(null);
+        setFormValid(false);
+    };
+
+    const storageType = selectedConfig.blockstore_type;
+    const storageNamespaceValidityRegexStr =
+        selectedConfig.blockstore_namespace_ValidityRegex || DEFAULT_BLOCKSTORE_VALIDITY_REGEX;
     const storageNamespaceValidityRegex = RegExp(storageNamespaceValidityRegexStr);
-    const storageNamespaceExample = config ? config.blockstore_namespace_example : DEFAULT_BLOCKSTORE_EXAMPLE;
+    const storageNamespaceExample = selectedConfig.blockstore_namespace_example || DEFAULT_BLOCKSTORE_EXAMPLE;
 
     useEffect(() => {
         if (repoNameField.current) {
             repoNameField.current.focus();
         }
     }, []);
+
+    useEffect(() => {
+        if (!selectedStorageID && storageConfigs[0]?.blockstore_id) {
+            setSelectedStorageID(storageConfigs[0].blockstore_id);
+        }
+    }, [selectedStorageID, storageConfigs]);
 
     const sampleCheckbox = (
         <Form.Group controlId="sampleData" className="mt-3">
@@ -107,6 +125,19 @@ export const RepositoryCreateForm = ({ formID, config, onSubmit, formValid, setF
 
     const advancedSettings = (
         <>
+            {multiStorage && (
+                <Form.Group controlId="storageID" className="mt-3">
+                    <FloatingLabel label="Storage Backend" controlId="storageBackendCtrl">
+                        <Form.Select value={selectedStorageID} onChange={onStorageChange}>
+                            {storageConfigs.map((storageConfig) => (
+                                <option key={storageConfig.blockstore_id} value={storageConfig.blockstore_id}>
+                                    {storageConfig.blockstore_description || storageConfig.blockstore_id}
+                                </option>
+                            ))}
+                        </Form.Select>
+                    </FloatingLabel>
+                </Form.Group>
+            )}
             <Form.Group controlId="defaultBranch" className="mt-3">
                 <FloatingLabel label="Default Branch Name" controlId="defaultBranchNameCtrl">
                     <Form.Control
@@ -171,6 +202,7 @@ export const RepositoryCreateForm = ({ formID, config, onSubmit, formValid, setF
                 }
                 onSubmit({
                     name: repoNameField.current.value,
+                    storage_id: selectedStorageID || undefined,
                     storage_namespace: storageNamespaceField.current.value,
                     default_branch: defaultBranchField.current.value,
                     sample_data: addSampleData,

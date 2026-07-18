@@ -149,6 +149,10 @@ var runCmd = &cobra.Command{
 		}
 		defer func() { _ = c.Close() }()
 
+		if err := ref.ValidateRepositoryStorageIDs(ctx, kvStore, cfg.StorageConfig()); err != nil {
+			logger.WithError(err).Fatal("storage configuration validation failed")
+		}
+
 		// Setup usage reporter - it is no longer possible to disable it
 		usageReporter := stats.NewUsageReporter(metadata.InstallationID, kvStore)
 		usageReporter.Start(ctx, baseCfg.UsageReport.FlushInterval, logger.WithField("service", "usage_report"))

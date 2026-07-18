@@ -97,7 +97,7 @@ const CreateRepositoryModal = ({ show, error, onSubmit, onCancel, inProgress }) 
             <Modal.Body>
                 <RepositoryCreateForm
                     formID="repository-create-form"
-                    config={config?.storages?.[0]}
+                    configs={config?.storages}
                     error={showError}
                     formValid={formValid}
                     setFormValid={setFormValid}
@@ -337,7 +337,8 @@ const RepositoriesPage = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [showCreateRepositoryModal, setShowCreateRepositoryModal]);
 
-    const allowSampleRepoCreation = true;
+    const allowSampleRepoCreation =
+        !err && storageConfigs.length === 1 && storageConfigs[0]?.blockstore_type === LOCAL_BLOCKSTORE_TYPE;
     const createSampleRepoButtonCallback = useCallback(async () => {
         if (loading) return;
         // note that this is only called on a single storage config server

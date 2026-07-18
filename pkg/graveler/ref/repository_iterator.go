@@ -3,19 +3,12 @@ package ref
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/treeverse/lakefs/pkg/config"
 	"github.com/treeverse/lakefs/pkg/graveler"
 	"github.com/treeverse/lakefs/pkg/kv"
 )
-
-func updateStorageID(repo *graveler.RepositoryRecord, storageConfig config.StorageConfig) {
-	if repo.StorageID == config.SingleBlockstoreID {
-		if storage := storageConfig.GetStorageByID(config.SingleBlockstoreID); storage != nil {
-			repo.StorageID = graveler.StorageID(storage.ID()) // Will return the real actual ID
-		}
-	}
-}
 
 type RepositoryIterator struct {
 	ctx           context.Context
@@ -63,8 +56,13 @@ func (ri *RepositoryIterator) Next() bool {
 	}
 
 	ri.value = graveler.RepoFromProto(repo)
-	ri.value.StorageID = graveler.StorageID(config.GetActualStorageID(ri.storageConfig, ri.value.StorageID.String()))
-	updateStorageID(ri.value, ri.storageConfig)
+	storageID, err := ri.storageConfig.ResolveStoredRepositoryStorageID(ri.value.StorageID.String())
+	if err != nil {
+		ri.err = fmt.Errorf("repository %q storage id %q: %w", ri.value.RepositoryID, ri.value.StorageID, err)
+		ri.value = nil
+		return false
+	}
+	ri.value.StorageID = graveler.StorageID(storageID)
 	return true
 }
 
@@ -101,4 +99,28 @@ func (ri *RepositoryIterator) Close() {
 	}
 	ri.it.Close()
 	ri.closed = true
+}
+
+func ValidateRepositoryStorageIDs(ctx context.Context, store kv.Store, storageConfig config.StorageConfig) error {
+	it, err := kv.NewPrimaryIterator(ctx, store, (&graveler.RepositoryData{}).ProtoReflect().Type(), graveler.RepositoriesPartition(), []byte(graveler.RepoPath("")), kv.IteratorOptionsAfter([]byte{}))
+	if err != nil {
+		return err
+	}
+	defer it.Close()
+
+	for it.Next() {
+		entry := it.Entry()
+		if entry == nil {
+			return graveler.ErrInvalid
+		}
+		data, ok := entry.Value.(*graveler.RepositoryData)
+		if data == nil || !ok {
+			return graveler.ErrReadingFromStore
+		}
+		repo := graveler.RepoFromProto(data)
+		if _, err := storageConfig.ResolveStoredRepositoryStorageID(repo.StorageID.String()); err != nil {
+			return fmt.Errorf("repository %q storage id %q: %w", repo.RepositoryID, repo.StorageID, err)
+		}
+	}
+	return it.Err()
 }

@@ -17,6 +17,8 @@ type ConfigType = {
 };
 
 type StorageConfig = {
+    blockstore_id?: string | null;
+    blockstore_description?: string | null;
     blockstore_namespace_ValidityRegex: string | null;
     blockstore_namespace_example: string | null;
     blockstore_type: string | null;

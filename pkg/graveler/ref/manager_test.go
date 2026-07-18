@@ -63,6 +63,37 @@ func (s *storeMock) GetStorageByID(storageID string) config.AdapterConfig {
 	}
 }
 
+func (s *storeMock) GetStorageIDs() []string {
+	if s.bcID == config.SingleBlockstoreID {
+		return []string{config.SingleBlockstoreID}
+	}
+	return []string{s.bcID}
+}
+
+func (s *storeMock) ResolveNewRepositoryStorageID(storageID string) (string, error) {
+	return s.ResolveStoredRepositoryStorageID(storageID)
+}
+
+func (s *storeMock) ResolveStoredRepositoryStorageID(storageID string) (string, error) {
+	if storageID == config.SingleBlockstoreID {
+		return s.bcID, nil
+	}
+	return storageID, nil
+}
+
+func (s *storeMock) ValidateObjectStorageID(storageID string) error {
+	_, err := s.ResolveStoredRepositoryStorageID(storageID)
+	return err
+}
+
+func (s *storeMock) IsMultiStorage() bool {
+	return s.bcID != config.SingleBlockstoreID
+}
+
+func (s *storeMock) SigningKey() config.SecureString {
+	return ""
+}
+
 func NewStorageConfigMock(bcID string) config.StorageConfig {
 	return &storeMock{
 		bcID: bcID,

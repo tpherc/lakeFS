@@ -249,10 +249,9 @@ type BlockstoreGS struct {
 	DataCredentialsJSON string `mapstructure:"data_credentials_json"`
 }
 
-type Blockstore struct {
-	Signing struct {
-		SecretKey SecureString `mapstructure:"secret_key"`
-	} `mapstructure:"signing"`
+// BlockstoreConfig contains block adapter settings shared by single-storage
+// mode and each named multi-storage entry.
+type BlockstoreConfig struct {
 	Type                   string           `mapstructure:"type"`
 	DefaultNamespacePrefix *string          `mapstructure:"default_namespace_prefix"`
 	Local                  *BlockstoreLocal `mapstructure:"local"`
@@ -261,11 +260,57 @@ type Blockstore struct {
 	GS                     *BlockstoreGS    `mapstructure:"gs"`
 }
 
+// BlockstoreStorage configures one resolved named storage backend.
+type BlockstoreStorage struct {
+	BlockstoreConfig   `mapstructure:",squash"`
+	Description        string `mapstructure:"description"`
+	BackwardCompatible bool   `mapstructure:"backward_compatible"`
+	storageID          string
+}
+
+// BlockstoreStore is one canonical blockstores.stores[] entry.
+type BlockstoreStore struct {
+	ID                string `mapstructure:"id"`
+	BlockstoreStorage `mapstructure:",squash"`
+}
+
+// Blockstores is the documented multi-storage registry. Backends are loaded
+// during startup; they are not API-managed lakeFS resources.
+type Blockstores struct {
+	Signing struct {
+		SecretKey SecureString `mapstructure:"secret_key"`
+	} `mapstructure:"signing"`
+	Stores []*BlockstoreStore `mapstructure:"stores"`
+}
+
+type Blockstore struct {
+	Signing struct {
+		SecretKey SecureString `mapstructure:"secret_key"`
+	} `mapstructure:"signing"`
+	BlockstoreConfig `mapstructure:",squash"`
+
+	storages            map[string]*BlockstoreStorage
+	storageIDs          []string
+	compatibleStorageID string
+}
+
 func (b *Blockstore) GetStorageIDs() []string {
+	if len(b.storages) > 0 {
+		storageIDs := make([]string, len(b.storageIDs))
+		copy(storageIDs, b.storageIDs)
+		return storageIDs
+	}
 	return []string{SingleBlockstoreID}
 }
 
 func (b *Blockstore) GetStorageByID(id string) AdapterConfig {
+	if len(b.storages) > 0 {
+		storage, ok := b.storages[id]
+		if !ok || storage == nil {
+			return nil
+		}
+		return storage
+	}
 	if id != SingleBlockstoreID {
 		return nil
 	}
@@ -277,61 +322,77 @@ func (b *Blockstore) BlockstoreType() string {
 	return b.Type
 }
 
-func (b *Blockstore) BlockstoreS3Params() (blockparams.S3, error) {
+func blockstoreS3Params(cfg *BlockstoreConfig) (blockparams.S3, error) {
 	var webIdentity *blockparams.S3WebIdentity
-	if b.S3.WebIdentity != nil {
+	if cfg.S3.WebIdentity != nil {
 		webIdentity = &blockparams.S3WebIdentity{
-			SessionDuration:     b.S3.WebIdentity.SessionDuration,
-			SessionExpiryWindow: b.S3.WebIdentity.SessionExpiryWindow,
+			SessionDuration:     cfg.S3.WebIdentity.SessionDuration,
+			SessionExpiryWindow: cfg.S3.WebIdentity.SessionExpiryWindow,
 		}
 	}
 
 	var creds blockparams.S3Credentials
-	if b.S3.Credentials != nil {
-		creds.AccessKeyID = b.S3.Credentials.AccessKeyID.SecureValue()
-		creds.SecretAccessKey = b.S3.Credentials.SecretAccessKey.SecureValue()
-		creds.SessionToken = b.S3.Credentials.SessionToken.SecureValue()
+	if cfg.S3.Credentials != nil {
+		creds.AccessKeyID = cfg.S3.Credentials.AccessKeyID.SecureValue()
+		creds.SecretAccessKey = cfg.S3.Credentials.SecretAccessKey.SecureValue()
+		creds.SessionToken = cfg.S3.Credentials.SessionToken.SecureValue()
 	}
 
 	return blockparams.S3{
-		Region:                        b.S3.Region,
-		Profile:                       b.S3.Profile,
-		CredentialsFile:               b.S3.CredentialsFile,
+		Region:                        cfg.S3.Region,
+		Profile:                       cfg.S3.Profile,
+		CredentialsFile:               cfg.S3.CredentialsFile,
 		Credentials:                   creds,
-		MaxRetries:                    b.S3.MaxRetries,
-		Endpoint:                      b.S3.Endpoint,
-		ForcePathStyle:                b.S3.ForcePathStyle,
-		DiscoverBucketRegion:          b.S3.DiscoverBucketRegion,
-		SkipVerifyCertificateTestOnly: b.S3.SkipVerifyCertificateTestOnly,
-		ServerSideEncryption:          b.S3.ServerSideEncryption,
-		ServerSideEncryptionKmsKeyID:  b.S3.ServerSideEncryptionKmsKeyID,
-		PreSignedExpiry:               b.S3.PreSignedExpiry,
-		PreSignedEndpoint:             b.S3.PreSignedEndpoint,
-		DisablePreSigned:              b.S3.DisablePreSigned,
-		DisablePreSignedUI:            b.S3.DisablePreSignedUI,
-		DisablePreSignedMultipart:     b.S3.DisablePreSignedMultipart,
-		ClientLogRetries:              b.S3.ClientLogRetries,
-		ClientLogRequest:              b.S3.ClientLogRequest,
+		MaxRetries:                    cfg.S3.MaxRetries,
+		Endpoint:                      cfg.S3.Endpoint,
+		ForcePathStyle:                cfg.S3.ForcePathStyle,
+		DiscoverBucketRegion:          cfg.S3.DiscoverBucketRegion,
+		SkipVerifyCertificateTestOnly: cfg.S3.SkipVerifyCertificateTestOnly,
+		ServerSideEncryption:          cfg.S3.ServerSideEncryption,
+		ServerSideEncryptionKmsKeyID:  cfg.S3.ServerSideEncryptionKmsKeyID,
+		PreSignedExpiry:               cfg.S3.PreSignedExpiry,
+		PreSignedEndpoint:             cfg.S3.PreSignedEndpoint,
+		DisablePreSigned:              cfg.S3.DisablePreSigned,
+		DisablePreSignedUI:            cfg.S3.DisablePreSignedUI,
+		DisablePreSignedMultipart:     cfg.S3.DisablePreSignedMultipart,
+		ClientLogRetries:              cfg.S3.ClientLogRetries,
+		ClientLogRequest:              cfg.S3.ClientLogRequest,
 		WebIdentity:                   webIdentity,
 	}, nil
 }
 
-func (b *Blockstore) BlockstoreLocalParams() (blockparams.Local, error) {
-	localPath := b.Local.Path
+func (b *Blockstore) BlockstoreS3Params() (blockparams.S3, error) {
+	return blockstoreS3Params(&b.BlockstoreConfig)
+}
+
+func (b *BlockstoreStorage) BlockstoreS3Params() (blockparams.S3, error) {
+	return blockstoreS3Params(&b.BlockstoreConfig)
+}
+
+func blockstoreLocalParams(cfg *BlockstoreConfig) (blockparams.Local, error) {
+	localPath := cfg.Local.Path
 	path, err := homedir.Expand(localPath)
 	if err != nil {
 		return blockparams.Local{}, fmt.Errorf("parse blockstore location URI %s: %w", localPath, err)
 	}
 
-	params := blockparams.Local(*b.Local)
+	params := blockparams.Local(*cfg.Local)
 	params.Path = path
 	return params, nil
 }
 
-func (b *Blockstore) BlockstoreGSParams() (blockparams.GS, error) {
+func (b *Blockstore) BlockstoreLocalParams() (blockparams.Local, error) {
+	return blockstoreLocalParams(&b.BlockstoreConfig)
+}
+
+func (b *BlockstoreStorage) BlockstoreLocalParams() (blockparams.Local, error) {
+	return blockstoreLocalParams(&b.BlockstoreConfig)
+}
+
+func blockstoreGSParams(cfg *BlockstoreConfig) (blockparams.GS, error) {
 	var customerSuppliedKey []byte = nil
-	if b.GS.ServerSideEncryptionCustomerSupplied != "" {
-		v, err := hex.DecodeString(b.GS.ServerSideEncryptionCustomerSupplied)
+	if cfg.GS.ServerSideEncryptionCustomerSupplied != "" {
+		v, err := hex.DecodeString(cfg.GS.ServerSideEncryptionCustomerSupplied)
 		if err != nil {
 			return blockparams.GS{}, err
 		}
@@ -339,55 +400,71 @@ func (b *Blockstore) BlockstoreGSParams() (blockparams.GS, error) {
 			return blockparams.GS{}, ErrBadGCPCSEKValue
 		}
 		customerSuppliedKey = v
-		if b.GS.ServerSideEncryptionKmsKeyID != "" {
+		if cfg.GS.ServerSideEncryptionKmsKeyID != "" {
 			return blockparams.GS{}, ErrGCPEncryptKeyConflict
 		}
 	}
 
-	credPath, err := homedir.Expand(b.GS.CredentialsFile)
+	credPath, err := homedir.Expand(cfg.GS.CredentialsFile)
 	if err != nil {
-		return blockparams.GS{}, fmt.Errorf("parse GS credentials path '%s': %w", b.GS.CredentialsFile, err)
+		return blockparams.GS{}, fmt.Errorf("parse GS credentials path '%s': %w", cfg.GS.CredentialsFile, err)
 	}
 
 	var dataCredPath string
-	if b.GS.DataCredentialsFile != "" {
-		dataCredPath, err = homedir.Expand(b.GS.DataCredentialsFile)
+	if cfg.GS.DataCredentialsFile != "" {
+		dataCredPath, err = homedir.Expand(cfg.GS.DataCredentialsFile)
 		if err != nil {
-			return blockparams.GS{}, fmt.Errorf("parse GS data credentials path '%s': %w", b.GS.DataCredentialsFile, err)
+			return blockparams.GS{}, fmt.Errorf("parse GS data credentials path '%s': %w", cfg.GS.DataCredentialsFile, err)
 		}
 	}
 
 	return blockparams.GS{
 		CredentialsFile:                      credPath,
-		CredentialsJSON:                      b.GS.CredentialsJSON,
-		PreSignedExpiry:                      b.GS.PreSignedExpiry,
-		DisablePreSigned:                     b.GS.DisablePreSigned,
-		DisablePreSignedUI:                   b.GS.DisablePreSignedUI,
+		CredentialsJSON:                      cfg.GS.CredentialsJSON,
+		PreSignedExpiry:                      cfg.GS.PreSignedExpiry,
+		DisablePreSigned:                     cfg.GS.DisablePreSigned,
+		DisablePreSignedUI:                   cfg.GS.DisablePreSignedUI,
 		ServerSideEncryptionCustomerSupplied: customerSuppliedKey,
-		ServerSideEncryptionKmsKeyID:         b.GS.ServerSideEncryptionKmsKeyID,
+		ServerSideEncryptionKmsKeyID:         cfg.GS.ServerSideEncryptionKmsKeyID,
 		DataCredentialsFile:                  dataCredPath,
-		DataCredentialsJSON:                  b.GS.DataCredentialsJSON,
+		DataCredentialsJSON:                  cfg.GS.DataCredentialsJSON,
+	}, nil
+}
+
+func (b *Blockstore) BlockstoreGSParams() (blockparams.GS, error) {
+	return blockstoreGSParams(&b.BlockstoreConfig)
+}
+
+func (b *BlockstoreStorage) BlockstoreGSParams() (blockparams.GS, error) {
+	return blockstoreGSParams(&b.BlockstoreConfig)
+}
+
+func blockstoreAzureParams(cfg *BlockstoreConfig) (blockparams.Azure, error) {
+	if cfg.Azure.AuthMethodDeprecated != "" {
+		logging.ContextUnavailable().Warn("blockstore.azure.auth_method is deprecated. Value is no longer used.")
+	}
+	if cfg.Azure.ChinaCloudDeprecated {
+		logging.ContextUnavailable().Warn("blockstore.azure.china_cloud is deprecated. Value is no longer used. Please pass Domain = 'blob.core.chinacloudapi.cn'")
+		cfg.Azure.Domain = "blob.core.chinacloudapi.cn"
+	}
+	return blockparams.Azure{
+		StorageAccount:     cfg.Azure.StorageAccount,
+		StorageAccessKey:   cfg.Azure.StorageAccessKey,
+		TryTimeout:         cfg.Azure.TryTimeout,
+		PreSignedExpiry:    cfg.Azure.PreSignedExpiry,
+		TestEndpointURL:    cfg.Azure.TestEndpointURL,
+		Domain:             cfg.Azure.Domain,
+		DisablePreSigned:   cfg.Azure.DisablePreSigned,
+		DisablePreSignedUI: cfg.Azure.DisablePreSignedUI,
 	}, nil
 }
 
 func (b *Blockstore) BlockstoreAzureParams() (blockparams.Azure, error) {
-	if b.Azure.AuthMethodDeprecated != "" {
-		logging.ContextUnavailable().Warn("blockstore.azure.auth_method is deprecated. Value is no longer used.")
-	}
-	if b.Azure.ChinaCloudDeprecated {
-		logging.ContextUnavailable().Warn("blockstore.azure.china_cloud is deprecated. Value is no longer used. Please pass Domain = 'blob.core.chinacloudapi.cn'")
-		b.Azure.Domain = "blob.core.chinacloudapi.cn"
-	}
-	return blockparams.Azure{
-		StorageAccount:     b.Azure.StorageAccount,
-		StorageAccessKey:   b.Azure.StorageAccessKey,
-		TryTimeout:         b.Azure.TryTimeout,
-		PreSignedExpiry:    b.Azure.PreSignedExpiry,
-		TestEndpointURL:    b.Azure.TestEndpointURL,
-		Domain:             b.Azure.Domain,
-		DisablePreSigned:   b.Azure.DisablePreSigned,
-		DisablePreSignedUI: b.Azure.DisablePreSignedUI,
-	}, nil
+	return blockstoreAzureParams(&b.BlockstoreConfig)
+}
+
+func (b *BlockstoreStorage) BlockstoreAzureParams() (blockparams.Azure, error) {
+	return blockstoreAzureParams(&b.BlockstoreConfig)
 }
 
 func (b *Blockstore) BlockstoreDescription() string {
@@ -406,18 +483,28 @@ func (b *Blockstore) ID() string {
 	return SingleBlockstoreID
 }
 
-func (b *Blockstore) SigningKey() SecureString {
-	return b.Signing.SecretKey
+func (b *BlockstoreStorage) BlockstoreType() string {
+	return b.Type
 }
 
-// GetActualStorageID - This returns the actual storageID of the storage
-func GetActualStorageID(storageConfig StorageConfig, storageID string) string {
-	if storageID == SingleBlockstoreID {
-		if storage := storageConfig.GetStorageByID(SingleBlockstoreID); storage != nil {
-			return storage.ID() // Will return the real actual ID
-		}
-	}
-	return storageID
+func (b *BlockstoreStorage) BlockstoreDescription() string {
+	return b.Description
+}
+
+func (b *BlockstoreStorage) GetDefaultNamespacePrefix() *string {
+	return b.DefaultNamespacePrefix
+}
+
+func (b *BlockstoreStorage) IsBackwardsCompatible() bool {
+	return b.BackwardCompatible
+}
+
+func (b *BlockstoreStorage) ID() string {
+	return b.storageID
+}
+
+func (b *Blockstore) SigningKey() SecureString {
+	return b.Signing.SecretKey
 }
 
 type Config interface {
@@ -432,6 +519,10 @@ type Config interface {
 type StorageConfig interface {
 	GetStorageByID(storageID string) AdapterConfig
 	GetStorageIDs() []string
+	ResolveNewRepositoryStorageID(storageID string) (string, error)
+	ResolveStoredRepositoryStorageID(storageID string) (string, error)
+	ValidateObjectStorageID(storageID string) error
+	IsMultiStorage() bool
 	SigningKey() SecureString
 }
 
@@ -472,10 +563,11 @@ type BaseConfig struct {
 			Prefix  string `mapstructure:"prefix"`
 		} `mapstructure:"env"`
 	} `mapstructure:"actions"`
-	Logging    Logging    `mapstructure:"logging"`
-	Database   Database   `mapstructure:"database"`
-	Blockstore Blockstore `mapstructure:"blockstore"`
-	Committed  struct {
+	Logging     Logging     `mapstructure:"logging"`
+	Database    Database    `mapstructure:"database"`
+	Blockstores Blockstores `mapstructure:"blockstores"`
+	Blockstore  Blockstore  `mapstructure:"blockstore"`
+	Committed   struct {
 		LocalCache struct {
 			SizeBytes             int64   `mapstructure:"size_bytes"`
 			Dir                   string  `mapstructure:"dir"`
@@ -569,10 +661,29 @@ func (c *BaseConfig) GetVersionContext() string {
 
 func ValidateBlockstore(c *Blockstore) error {
 	if c.Signing.SecretKey == "" {
-		return fmt.Errorf("'blockstore.signing.secret_key: %w", ErrMissingRequiredKeys)
+		return fmt.Errorf("'blockstore.signing.secret_key': %w", ErrMissingRequiredKeys)
 	}
-	if c.Type == "" {
-		return fmt.Errorf("'blockstore.type: %w", ErrMissingRequiredKeys)
+	if !c.IsMultiStorage() {
+		return validateStorageEntry("blockstore", &c.BlockstoreConfig)
+	}
+	compatibleCount := 0
+	for _, id := range c.GetStorageIDs() {
+		storage := c.storages[id]
+		if id == "" || !storageIDRegexp.MatchString(id) {
+			return fmt.Errorf("'blockstores.stores.id': %w", ErrBadConfiguration)
+		}
+		if storage == nil {
+			return fmt.Errorf("'blockstores.stores.%s': %w", id, ErrBadConfiguration)
+		}
+		if err := validateStorageEntry("blockstores.stores."+id, &storage.BlockstoreConfig); err != nil {
+			return err
+		}
+		if storage.BackwardCompatible {
+			compatibleCount++
+		}
+	}
+	if compatibleCount > 1 {
+		return fmt.Errorf("'blockstores.stores.backward_compatible': %w", ErrBadConfiguration)
 	}
 	return nil
 }
@@ -581,6 +692,7 @@ func ValidateBlockstore(c *Blockstore) error {
 func NewConfig(cfgType string, c Config) (*BaseConfig, error) {
 	// Inform viper of all expected fields.  Otherwise, it fails to deserialize from the
 	// environment.
+	storageSource := detectStorageConfigSource()
 	SetDefaults(cfgType, c)
 	err := Unmarshal(c)
 	if err != nil {
@@ -588,6 +700,11 @@ func NewConfig(cfgType string, c Config) (*BaseConfig, error) {
 	}
 
 	cfg := c.GetBaseConfig()
+	resolvedStorage, err := ResolveBlockstoreConfig(&cfg.Blockstore, &cfg.Blockstores, storageSource)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Blockstore = *resolvedStorage
 	// setup logging package
 	logging.SetOutputFormat(cfg.Logging.Format)
 	err = logging.SetOutputs(cfg.Logging.Output, cfg.Logging.FileMaxSizeMB, cfg.Logging.FilesKeep)
