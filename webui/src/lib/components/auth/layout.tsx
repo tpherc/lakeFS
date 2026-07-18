@@ -33,12 +33,11 @@ export const AuthLayout = () => {
                                 setShowRBACAlert(false);
                             }}
                         >
-                            <InfoIcon /> Enhance Your Security with{' '}
+                            <InfoIcon /> Full{' '}
                             <Alert.Link href={'https://docs.lakefs.io/security/rbac/'}>
                                 Role-Based Access Control
                             </Alert.Link>{' '}
-                            – Available on <Alert.Link href={'https://lakefs.cloud/register'}>lakeFS Cloud</Alert.Link>{' '}
-                            and <Alert.Link href={'https://docs.lakefs.io/enterprise/'}>lakeFS Enterprise</Alert.Link>!
+                            is available by setting <code>auth.ui_config.rbac: internal</code>.
                         </Alert>
                     )}
                 </div>
