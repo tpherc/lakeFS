@@ -20,15 +20,18 @@ func (m *mockAuthConfig) UseUILoginPlaceholders() bool          { return false }
 
 type mockConfig struct {
 	config.Config
+	base config.BaseConfig
 	auth mockAuthConfig
 }
 
-func (m *mockConfig) AuthConfig() config.AuthConfig { return &m.auth }
+func (m *mockConfig) GetBaseConfig() *config.BaseConfig { return &m.base }
+func (m *mockConfig) AuthConfig() config.AuthConfig     { return &m.auth }
 
 func TestNewAuthService_InternalRBAC(t *testing.T) {
 	ctx := context.Background()
 	cfg := &mockConfig{}
 	cfg.auth.ui.RBAC = config.AuthRBACInternal
+	cfg.base.Features.LocalRBAC = true
 
 	logger := logging.DummyLogger{}
 
@@ -46,6 +49,26 @@ func TestNewAuthService_InternalRBAC(t *testing.T) {
 
 	if !svc.IsAdvancedAuth() {
 		t.Errorf("expected IsAdvancedAuth() to be true for internal RBAC")
+	}
+}
+
+func TestCheckAuthModeSupport_InternalRBACUsesExternalAPIWhenLocalRBACDisabled(t *testing.T) {
+	cfg := &mockAuthConfig{}
+	cfg.ui.RBAC = config.AuthRBACInternal
+	cfg.base.API.Endpoint = "http://localhost:8000"
+
+	if err := checkAuthModeSupport(cfg, false); err != nil {
+		t.Fatalf("expected internal RBAC with features.local_rbac=false to use external auth API: %v", err)
+	}
+}
+
+func TestCheckAuthModeSupport_InternalRBACRejectsAmbiguousLocalAndExternalConfig(t *testing.T) {
+	cfg := &mockAuthConfig{}
+	cfg.ui.RBAC = config.AuthRBACInternal
+	cfg.base.API.Endpoint = "http://localhost:8000"
+
+	if err := checkAuthModeSupport(cfg, true); err == nil {
+		t.Fatal("expected internal RBAC with local RBAC enabled and auth API configured to fail")
 	}
 }
 
