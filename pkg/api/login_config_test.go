@@ -52,6 +52,17 @@ func TestNewLoginConfigPreservesExplicitLoginURL(t *testing.T) {
 	require.Equal(t, config.AuthLoginURLMethodSelect, *loginConfig.LoginUrlMethod)
 }
 
+func TestNewLoginConfigDoesNotAdvertiseOIDCWhenAuthenticationAPISelected(t *testing.T) {
+	authConfig := &config.Auth{}
+	authConfig.AuthenticationAPI.Endpoint = "https://auth.example.com"
+	authConfig.Providers.OIDC = validLoginConfigOIDCProvider()
+
+	loginConfig := newLoginConfig(authConfig)
+
+	require.NotEqual(t, authentication.OIDCLoginPath, loginConfig.LoginUrl)
+	require.False(t, slices.Contains(loginConfig.LoginCookieNames, auth.OIDCAuthSessionName))
+}
+
 func TestGetSetupStateTreatsInternalRBACWithLocalRBACFalseAsExternal(t *testing.T) {
 	cfg := &config.ConfigImpl{}
 	cfg.Features.LocalRBAC = false

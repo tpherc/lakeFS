@@ -1,6 +1,7 @@
 package authentication
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,7 +10,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/treeverse/lakefs/pkg/auth"
+	"github.com/treeverse/lakefs/pkg/auth/model"
 	"github.com/treeverse/lakefs/pkg/auth/oidc/encoding"
+	"github.com/treeverse/lakefs/pkg/logging"
 )
 
 func TestOIDCTransactionSessionDecodesCorruptTransaction(t *testing.T) {
@@ -101,4 +104,44 @@ func TestOIDCSaveClaimsEnforcesSizeLimit(t *testing.T) {
 		"large": strings.Repeat("x", oidcClaimsMaxJSONSize),
 	})
 	require.Error(t, err)
+}
+
+func TestOIDCSessionSaveClaimsWritesCurrentAuthSchema(t *testing.T) {
+	store := testSessionStore(t)
+	saveReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/oidc/callback", nil)
+	rec := httptest.NewRecorder()
+	oidcSession, err := (oidcSessionStore{store: store}).Load(rec, saveReq)
+	require.NoError(t, err)
+	require.NoError(t, oidcSession.SaveClaims(encoding.Claims{"sub": "alice"}))
+
+	loadReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/repositories", nil)
+	cookies := rec.Result().Cookies()
+	require.Len(t, cookies, 1)
+	loadReq.AddCookie(cookies[0])
+	loadedSession, err := store.Get(loadReq, auth.OIDCAuthSessionName)
+	require.NoError(t, err)
+
+	externalID := "alice"
+	user, err := auth.UserFromOIDCSession(t.Context(), logging.Dummy(), &oidcRequestAuthService{
+		user: &model.User{
+			CreatedAt:  time.Now().UTC(),
+			Username:   "alice",
+			ExternalID: &externalID,
+			Source:     "oidc",
+		},
+	}, loadedSession, &auth.OIDCConfig{})
+	require.NoError(t, err)
+	require.Equal(t, "alice", user.Username)
+}
+
+type oidcRequestAuthService struct {
+	auth.Service
+	user *model.User
+}
+
+func (s *oidcRequestAuthService) GetUserByExternalID(_ context.Context, externalID string) (*model.User, error) {
+	if s.user == nil || s.user.ExternalID == nil || *s.user.ExternalID != externalID {
+		return nil, auth.ErrNotFound
+	}
+	return s.user, nil
 }
