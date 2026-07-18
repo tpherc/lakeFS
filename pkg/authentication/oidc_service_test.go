@@ -129,7 +129,7 @@ func TestOIDCCallbackConsumesTransactionBeforeExchangeAndStoresNormalizedClaims(
 	callbackRec := httptest.NewRecorder()
 
 	service.OauthCallback(callbackRec, callbackReq, store)
-	require.Equal(t, http.StatusTemporaryRedirect, callbackRec.Code)
+	require.Equal(t, http.StatusFound, callbackRec.Code)
 	require.Equal(t, "/repositories", callbackRec.Header().Get("Location"))
 	require.Equal(t, 1, fakeClient.exchangeCalls)
 
@@ -161,12 +161,12 @@ func TestOIDCCallbackConsumesTransactionBeforeExchangeAndStoresNormalizedClaims(
 	}
 	replayRec := httptest.NewRecorder()
 	service.OauthCallback(replayRec, replayReq, store)
-	require.Equal(t, http.StatusTemporaryRedirect, replayRec.Code)
+	require.Equal(t, http.StatusFound, replayRec.Code)
 	require.Equal(t, "/auth/login", replayRec.Header().Get("Location"))
 	require.Equal(t, 1, fakeClient.exchangeCalls)
 }
 
-func TestOIDCCallbackWrongStateRetainsTransaction(t *testing.T) {
+func TestOIDCCallbackWrongStateClearsTransaction(t *testing.T) {
 	store := testSessionStore(t)
 	transaction := sampleOIDCTransaction("https://lakefs.example/api/v1/oidc/callback", "/repositories")
 	loginReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/oidc/login", nil)
@@ -181,12 +181,26 @@ func TestOIDCCallbackWrongStateRetainsTransaction(t *testing.T) {
 	callbackRec := httptest.NewRecorder()
 
 	service.OauthCallback(callbackRec, callbackReq, store)
-	require.Equal(t, http.StatusTemporaryRedirect, callbackRec.Code)
-	require.Empty(t, callbackRec.Result().Cookies())
+	require.Equal(t, http.StatusFound, callbackRec.Code)
+	require.NotEmpty(t, callbackRec.Result().Cookies())
+
+	afterReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/api/v1/oidc/callback", nil)
+	for _, cookie := range latestCookies(callbackRec.Result()) {
+		afterReq.AddCookie(cookie)
+	}
+	afterSession, err := (oidcSessionStore{store: store}).Load(httptest.NewRecorder(), afterReq)
+	require.NoError(t, err)
+	_, err = afterSession.Transaction()
+	require.Error(t, err)
 }
 
 func TestNormalizeOIDCClaimsRequiresSubject(t *testing.T) {
 	_, err := normalizeOIDCClaims(encoding.Claims{"iss": "https://idp.example"}, config.OIDC{})
+	require.Error(t, err)
+}
+
+func TestNormalizeOIDCClaimsRequiresIssuer(t *testing.T) {
+	_, err := normalizeOIDCClaims(encoding.Claims{"sub": "alice"}, config.OIDC{})
 	require.Error(t, err)
 }
 
@@ -199,6 +213,7 @@ func testOIDCService(client oidcProtocolClient, claimsConfig config.OIDC) *OIDCS
 		oidc:                 client,
 		callbacks:            callbacks,
 		userClaimsConfig:     claimsConfig,
+		sessionDuration:      time.Hour,
 		logger:               logging.ContextUnavailable(),
 		postLoginRedirectURL: "",
 	}

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRequestBaseURLIgnoresForwardedHeaders(t *testing.T) {
+func TestRequestBaseURLIgnoresForwardedHost(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "https://lakefs.example/repositories", nil)
 	req.Header.Set("X-Forwarded-Host", "evil.example")
 	req.Header.Set("X-Forwarded-Proto", "http")
@@ -21,6 +21,14 @@ func TestRequestBaseURLIgnoresForwardedHeaders(t *testing.T) {
 func TestRequestBaseURLUsesObservedTLS(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://lakefs.example/repositories", nil)
 	req.TLS = &tls.ConnectionState{}
+	got, err := RequestBaseURL(req)
+	require.NoError(t, err)
+	require.Equal(t, "https://lakefs.example", got)
+}
+
+func TestRequestBaseURLUsesForwardedHTTPS(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://lakefs.example/repositories", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
 	got, err := RequestBaseURL(req)
 	require.NoError(t, err)
 	require.Equal(t, "https://lakefs.example", got)

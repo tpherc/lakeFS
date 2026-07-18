@@ -10,15 +10,11 @@ import (
 )
 
 func RequestBaseURL(r *http.Request) (string, error) {
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
 	host := r.Host
 	if host == "" {
 		return "", fmt.Errorf("missing request host")
 	}
-	return NormalizeBaseURL(scheme + "://" + host)
+	return NormalizeBaseURL(RequestScheme(r) + "://" + host)
 }
 
 func NormalizeBaseURL(raw string) (string, error) {

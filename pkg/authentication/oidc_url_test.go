@@ -39,6 +39,19 @@ func TestOIDCCallbackResolverRequiresExactAllowedRequestBaseURL(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestOIDCCallbackResolverUsesForwardedHTTPSForAllowedBaseURLs(t *testing.T) {
+	resolver, err := newOIDCCallbackResolver(config.OIDCProvider{
+		CallbackBaseURLs: []string{"https://lakefs.example"},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "http://lakefs.example/oidc/login", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	got, err := resolver.RedirectURI(req)
+	require.NoError(t, err)
+	require.Equal(t, "https://lakefs.example/api/v1/oidc/callback", got)
+}
+
 func TestOIDCProviderConfigRejectsLoopbackLookalikes(t *testing.T) {
 	for _, callbackBaseURL := range []string{
 		"http://localhost.example.com",

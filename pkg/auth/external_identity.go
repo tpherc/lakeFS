@@ -15,11 +15,12 @@ import (
 // ExternalIdentity is the protocol-neutral user identity resolved from a
 // verified external authentication exchange.
 type ExternalIdentity struct {
-	ExternalID    string
-	Source        string
-	FriendlyName  string
-	Email         string
-	InitialGroups []string
+	ExternalID        string
+	LegacyExternalIDs []string
+	Source            string
+	FriendlyName      string
+	Email             string
+	InitialGroups     []string
 }
 
 type ExternalIdentityProvisioningOptions struct {
@@ -33,6 +34,9 @@ func ResolveOrProvisionExternalUser(ctx context.Context, logger logging.Logger, 
 	if err := validateExternalIdentityID(identity); err != nil {
 		return nil, err
 	}
+	if err := validateInitialGroups(identity.InitialGroups); err != nil {
+		return nil, err
+	}
 
 	log := logger.WithFields(logging.Fields{
 		"external_id":   identity.ExternalID,
@@ -40,7 +44,7 @@ func ResolveOrProvisionExternalUser(ctx context.Context, logger logging.Logger, 
 		"friendly_name": identity.FriendlyName,
 	})
 
-	user, err := authService.GetUserByExternalID(ctx, identity.ExternalID)
+	user, err := findExternalUser(ctx, authService, identity)
 	if err == nil {
 		log.Info("Found user")
 		return enhanceExternalUserFriendlyName(ctx, user, identity.FriendlyName, options.PersistFriendlyName, authService, logger), nil
@@ -48,10 +52,6 @@ func ResolveOrProvisionExternalUser(ctx context.Context, logger logging.Logger, 
 	if !errors.Is(err, ErrNotFound) {
 		log.WithError(err).Error("Failed to get external user from database")
 		return nil, fmt.Errorf("get user by external ID: %w", err)
-	}
-
-	if err := validateInitialGroups(identity.InitialGroups); err != nil {
-		return nil, err
 	}
 
 	log.Info("User not found; creating them")
@@ -92,6 +92,23 @@ func ResolveOrProvisionExternalUser(ctx context.Context, logger logging.Logger, 
 	}
 
 	return enhanceExternalUserFriendlyName(ctx, &newUser, identity.FriendlyName, false, authService, logger), nil
+}
+
+func findExternalUser(ctx context.Context, authService Service, identity ExternalIdentity) (*model.User, error) {
+	user, err := authService.GetUserByExternalID(ctx, identity.ExternalID)
+	if err == nil || !errors.Is(err, ErrNotFound) {
+		return user, err
+	}
+	for _, legacyExternalID := range identity.LegacyExternalIDs {
+		if strings.TrimSpace(legacyExternalID) == "" || legacyExternalID == identity.ExternalID {
+			continue
+		}
+		user, err = authService.GetUserByExternalID(ctx, legacyExternalID)
+		if err == nil || !errors.Is(err, ErrNotFound) {
+			return user, err
+		}
+	}
+	return nil, ErrNotFound
 }
 
 func validateExternalIdentityID(identity ExternalIdentity) error {

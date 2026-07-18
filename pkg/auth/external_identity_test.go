@@ -164,6 +164,31 @@ func TestResolveOrProvisionExternalUserExistingUserUpdatesFriendlyNameOnly(t *te
 	require.Equal(t, []externalFriendlyNameUpdate{{username: "bob", friendlyName: "Bob New"}}, authService.friendlyNameUpdates)
 }
 
+func TestResolveOrProvisionExternalUserFindsLegacyExternalID(t *testing.T) {
+	authService := newExternalIdentityAuthService(&model.User{
+		Username:     "legacy-alice",
+		ExternalID:   stringPtr("alice"),
+		Source:       "oidc",
+		FriendlyName: stringPtr("Old Name"),
+	})
+
+	user, err := ResolveOrProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
+		ExternalID:        "oidc:hashed-alice",
+		LegacyExternalIDs: []string{"alice"},
+		Source:            "oidc",
+		FriendlyName:      "Alice New",
+		InitialGroups:     []string{"Developers"},
+	}, ExternalIdentityProvisioningOptions{PersistFriendlyName: true})
+	require.NoError(t, err)
+
+	require.Equal(t, "legacy-alice", user.Username)
+	require.Equal(t, "Alice New", stringValue(user.FriendlyName))
+	require.Equal(t, 2, authService.getUserCalls)
+	require.Empty(t, authService.createRequests)
+	require.Empty(t, authService.addedGroups)
+	require.Equal(t, []externalFriendlyNameUpdate{{username: "legacy-alice", friendlyName: "Alice New"}}, authService.friendlyNameUpdates)
+}
+
 func TestResolveOrProvisionExternalUserReturnsFriendlyNameWithoutPersisting(t *testing.T) {
 	authService := newExternalIdentityAuthService()
 

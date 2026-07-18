@@ -102,7 +102,7 @@ func TestOIDCSaveClaimsEnforcesSizeLimit(t *testing.T) {
 	err = oidcSession.SaveClaims(encoding.Claims{
 		"sub":   "alice",
 		"large": strings.Repeat("x", oidcClaimsMaxJSONSize),
-	})
+	}, time.Now().Add(time.Hour))
 	require.Error(t, err)
 }
 
@@ -112,7 +112,8 @@ func TestOIDCSessionSaveClaimsWritesCurrentAuthSchema(t *testing.T) {
 	rec := httptest.NewRecorder()
 	oidcSession, err := (oidcSessionStore{store: store}).Load(rec, saveReq)
 	require.NoError(t, err)
-	require.NoError(t, oidcSession.SaveClaims(encoding.Claims{"sub": "alice"}))
+	expiresAt := time.Now().Add(time.Hour).Truncate(time.Second)
+	require.NoError(t, oidcSession.SaveClaims(encoding.Claims{"iss": "https://issuer.example", "sub": "alice"}, expiresAt))
 
 	loadReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/repositories", nil)
 	cookies := rec.Result().Cookies()
@@ -120,6 +121,9 @@ func TestOIDCSessionSaveClaimsWritesCurrentAuthSchema(t *testing.T) {
 	loadReq.AddCookie(cookies[0])
 	loadedSession, err := store.Get(loadReq, auth.OIDCAuthSessionName)
 	require.NoError(t, err)
+	loadedExpiresAt, ok := loadedSession.Values["_lakefs_oidc_claims_expires_at"].(int64)
+	require.True(t, ok)
+	require.Equal(t, expiresAt.Unix(), loadedExpiresAt)
 
 	externalID := "alice"
 	user, err := auth.UserFromOIDCSession(t.Context(), logging.Dummy(), &oidcRequestAuthService{

@@ -2,10 +2,13 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gorilla/sessions"
 	"github.com/treeverse/lakefs/pkg/auth/model"
@@ -22,7 +25,9 @@ const (
 	SAMLAuthSessionName       = "saml_auth_session"
 
 	oidcClaimsSchemaVersionSessionKey = "_lakefs_oidc_claims_schema_version"
-	currentOIDCClaimsSchemaVersion    = 1
+	oidcClaimsExpiresAtSessionKey     = "_lakefs_oidc_claims_expires_at"
+	currentOIDCClaimsSchemaVersion    = 2
+	oidcAuthSource                    = "oidc"
 	defaultSAMLAuthSource             = "saml"
 )
 
@@ -106,19 +111,25 @@ func UserFromSAMLSession(ctx context.Context, logger logging.Logger, authService
 }
 
 func UserFromOIDCSession(ctx context.Context, logger logging.Logger, authService Service, authSession *sessions.Session, oidcConfig *OIDCConfig) (*model.User, error) {
-	idTokenClaims, found, err := oidcClaimsFromSession(authSession)
+	idTokenClaims, found, err := oidcClaimsFromSession(authSession, time.Now())
 	if !found {
 		return nil, nil
 	}
 	if err != nil {
 		logger.WithError(err).Debug("failed decoding OIDC token claims")
-		return nil, ErrAuthenticatingRequest
+		return nil, fmt.Errorf("%w: %w", ErrAuthenticatingRequest, err)
 	}
-	externalID, ok := idTokenClaims["sub"].(string)
-	if !ok {
+	subject, ok := idTokenClaims["sub"].(string)
+	if !ok || strings.TrimSpace(subject) == "" {
 		logger.WithField("sub", idTokenClaims["sub"]).Error("Failed type assertion for sub claim")
 		return nil, ErrAuthenticatingRequest
 	}
+	issuer, ok := idTokenClaims["iss"].(string)
+	if !ok || strings.TrimSpace(issuer) == "" {
+		logger.WithField("iss", idTokenClaims["iss"]).Error("Failed type assertion for issuer claim")
+		return nil, ErrAuthenticatingRequest
+	}
+	externalID := oidcExternalID(issuer, subject)
 	for claimName, expectedValue := range oidcConfig.ValidateIDTokenClaims {
 		actualValue, ok := idTokenClaims[claimName]
 		if !ok || actualValue != expectedValue {
@@ -147,28 +158,31 @@ func UserFromOIDCSession(ctx context.Context, logger logging.Logger, authService
 	}
 
 	return ResolveOrProvisionExternalUser(ctx, logger, authService, ExternalIdentity{
-		ExternalID:    externalID,
-		Source:        "oidc",
-		FriendlyName:  friendlyName,
-		Email:         email,
-		InitialGroups: initialGroups,
+		ExternalID:        externalID,
+		LegacyExternalIDs: []string{subject},
+		Source:            oidcAuthSource,
+		FriendlyName:      friendlyName,
+		Email:             email,
+		InitialGroups:     initialGroups,
 	}, ExternalIdentityProvisioningOptions{PersistFriendlyName: oidcConfig.PersistFriendlyName})
 }
 
-// MarkOIDCSessionClaimsCurrent marks claims saved by the current normalized OIDC callback schema.
-func MarkOIDCSessionClaimsCurrent(session *sessions.Session) {
+// MarkOIDCSessionClaimsCurrent marks claims saved by the current normalized
+// embedded OIDC callback schema and records the local lakeFS session expiry.
+func MarkOIDCSessionClaimsCurrent(session *sessions.Session, expiresAt time.Time) {
 	if session != nil {
 		session.Values[oidcClaimsSchemaVersionSessionKey] = currentOIDCClaimsSchemaVersion
+		session.Values[oidcClaimsExpiresAtSessionKey] = expiresAt.UTC().Unix()
 	}
 }
 
-func oidcClaimsFromSession(authSession *sessions.Session) (oidcencoding.Claims, bool, error) {
+func oidcClaimsFromSession(authSession *sessions.Session, now time.Time) (oidcencoding.Claims, bool, error) {
 	value := authSession.Values[IDTokenClaimsSessionKey]
 	if value == nil {
 		return nil, false, nil
 	}
-	if !oidcSessionClaimsCurrent(authSession) {
-		return nil, true, fmt.Errorf("OIDC claims session schema is not current")
+	if err := validateOIDCSessionClaimsCurrent(authSession, now); err != nil {
+		return nil, true, err
 	}
 	claims, ok := value.(string)
 	if !ok {
@@ -184,48 +198,78 @@ func oidcClaimsFromSession(authSession *sessions.Session) (oidcencoding.Claims, 
 	return decoded, true, nil
 }
 
-func oidcSessionClaimsCurrent(session *sessions.Session) bool {
+func validateOIDCSessionClaimsCurrent(session *sessions.Session, now time.Time) error {
 	version, ok := session.Values[oidcClaimsSchemaVersionSessionKey].(int)
-	return ok && version == currentOIDCClaimsSchemaVersion
+	if !ok || version != currentOIDCClaimsSchemaVersion {
+		return fmt.Errorf("OIDC claims session schema is not current")
+	}
+	expiresAt, ok := oidcSessionClaimsExpiresAt(session)
+	if !ok {
+		return fmt.Errorf("OIDC claims session expiry is missing")
+	}
+	if !expiresAt.After(now) {
+		return fmt.Errorf("%w: OIDC session expired", ErrSessionExpired)
+	}
+	return nil
+}
+
+func oidcSessionClaimsExpiresAt(session *sessions.Session) (time.Time, bool) {
+	switch value := session.Values[oidcClaimsExpiresAtSessionKey].(type) {
+	case int64:
+		return time.Unix(value, 0), true
+	case int:
+		return time.Unix(int64(value), 0), true
+	case float64:
+		return time.Unix(int64(value), 0), true
+	default:
+		return time.Time{}, false
+	}
+}
+
+func oidcExternalID(issuer, subject string) string {
+	sum := sha256.Sum256([]byte(issuer + "\x00" + subject))
+	return oidcAuthSource + ":" + base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func initialGroupsFromClaims(groupsClaim any, defaultInitialGroups []string) ([]string, error) {
 	if groupsClaim == nil {
-		return append([]string(nil), defaultInitialGroups...), nil
+		return normalizeInitialGroups(defaultInitialGroups), nil
 	}
 	groups := make([]string, 0)
-	seen := make(map[string]struct{})
 	switch v := groupsClaim.(type) {
 	case string:
 		for item := range strings.SplitSeq(v, ",") {
-			groups = appendInitialGroup(groups, seen, item)
+			groups = append(groups, item)
 		}
 	case []string:
-		for _, item := range v {
-			groups = appendInitialGroup(groups, seen, item)
-		}
+		groups = append(groups, v...)
 	case []any:
 		for _, item := range v {
 			str, ok := item.(string)
 			if !ok {
 				return nil, fmt.Errorf("%w: initial groups must be strings", ErrInvalidFormat)
 			}
-			groups = appendInitialGroup(groups, seen, str)
+			groups = append(groups, str)
 		}
 	default:
 		return nil, fmt.Errorf("%w: initial groups claim must be a string or string array", ErrInvalidFormat)
 	}
-	return groups, nil
+	return normalizeInitialGroups(groups), nil
 }
 
-func appendInitialGroup(groups []string, seen map[string]struct{}, group string) []string {
-	trimmed := strings.TrimSpace(group)
-	if trimmed == "" {
-		return groups
+func normalizeInitialGroups(groups []string) []string {
+	normalized := make([]string, 0, len(groups))
+	seen := make(map[string]struct{}, len(groups))
+	for _, group := range groups {
+		trimmed := strings.TrimSpace(group)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
 	}
-	if _, ok := seen[trimmed]; ok {
-		return groups
-	}
-	seen[trimmed] = struct{}{}
-	return append(groups, trimmed)
+	return normalized
 }

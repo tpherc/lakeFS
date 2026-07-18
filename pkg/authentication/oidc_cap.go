@@ -3,16 +3,17 @@ package authentication
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	capoidc "github.com/hashicorp/cap/oidc"
 	"github.com/treeverse/lakefs/pkg/auth/oidc/encoding"
 	"github.com/treeverse/lakefs/pkg/config"
-	"github.com/treeverse/lakefs/pkg/httputil"
 )
 
 const oidcProviderDiscoveryTimeout = 30 * time.Second
@@ -168,10 +169,7 @@ func newCAPOIDCConfig(ctx context.Context, providerConfig config.OIDCProvider) (
 	}
 	scopes := []string{"profile"}
 	scopes = append(scopes, providerConfig.AdditionalScopeClaims...)
-	issuerURL, err := httputil.NormalizeBaseURL(providerConfig.URL)
-	if err != nil {
-		return nil, err
-	}
+	issuerURL := strings.TrimSpace(providerConfig.URL)
 	return capoidc.NewConfig(
 		issuerURL,
 		providerConfig.ClientID,
@@ -266,18 +264,34 @@ func (t *boundedRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 		next = http.DefaultTransport
 	}
 	ctx := req.Context()
+	cancel := func() {}
 	if t.startupCtx != nil && t.usedStartupContext.CompareAndSwap(false, true) {
-		ctx = cancelWithParent(ctx, t.startupCtx)
+		var parentCancel context.CancelFunc
+		ctx, parentCancel = cancelWithParent(ctx, t.startupCtx)
+		cancel = combineCancel(cancel, parentCancel)
 	}
 	if t.timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, t.timeout)
-		defer cancel()
+		var timeoutCancel context.CancelFunc
+		ctx, timeoutCancel = context.WithTimeout(ctx, t.timeout)
+		cancel = combineCancel(cancel, timeoutCancel)
 	}
-	return next.RoundTrip(req.WithContext(ctx))
+	resp, err := next.RoundTrip(req.WithContext(ctx))
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if resp.Body == nil {
+		cancel()
+		return resp, nil
+	}
+	resp.Body = &cancelOnCloseBody{
+		ReadCloser: resp.Body,
+		cancel:     cancel,
+	}
+	return resp, nil
 }
 
-func cancelWithParent(ctx, parent context.Context) context.Context {
+func cancelWithParent(ctx, parent context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(ctx)
 	go func() {
 		select {
@@ -286,5 +300,36 @@ func cancelWithParent(ctx, parent context.Context) context.Context {
 		case <-ctx.Done():
 		}
 	}()
-	return ctx
+	return ctx, cancel
+}
+
+func combineCancel(first, second context.CancelFunc) context.CancelFunc {
+	return func() {
+		first()
+		second()
+	}
+}
+
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (b *cancelOnCloseBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil {
+		b.cancelOnce()
+	}
+	return n, err
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancelOnce()
+	return err
+}
+
+func (b *cancelOnCloseBody) cancelOnce() {
+	b.once.Do(b.cancel)
 }

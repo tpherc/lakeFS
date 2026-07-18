@@ -24,4 +24,5 @@ var (
 	ErrMigrationNotPossible    = errors.New("auth migration not possible")
 	ErrInternalServerError     = errors.New("internal server error")
 	ErrAuthenticatingRequest   = errors.New("error authenticating request")
+	ErrSessionExpired          = errors.New("session expired")
 )

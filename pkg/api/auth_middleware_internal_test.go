@@ -119,6 +119,20 @@ func TestCheckSecurityRequirementsRejectsHistoricalOIDCSession(t *testing.T) {
 	requireSessionExpired(t, rec.Result().Cookies(), auth.OIDCAuthSessionName)
 }
 
+func TestCheckSecurityRequirementsRejectsExpiredOIDCSession(t *testing.T) {
+	store := newMiddlewareSessionStore(t)
+	req := httptest.NewRequest(http.MethodGet, "/repositories", nil)
+	req.AddCookie(oidcSessionCookieWithExpiry(t, store, "oidc-user", time.Now().Add(-time.Second)))
+	rec := httptest.NewRecorder()
+
+	user, err := checkSecurityRequirements(rec, req, authSecurityRequirements("oidc_auth"), logging.Dummy(), nil, newMiddlewareAuthService("oidc-user"), store, &auth.OIDCConfig{}, nil)
+
+	require.Nil(t, user)
+	require.ErrorIs(t, err, auth.ErrAuthenticatingRequest)
+	require.ErrorIs(t, err, auth.ErrSessionExpired)
+	requireSessionExpired(t, rec.Result().Cookies(), auth.OIDCAuthSessionName)
+}
+
 func authSecurityRequirements(providers ...string) openapi3.SecurityRequirements {
 	requirements := make(openapi3.SecurityRequirements, len(providers))
 	for i, provider := range providers {
@@ -136,14 +150,26 @@ func newMiddlewareSessionStore(t testing.TB) sessions.Store {
 
 func oidcSessionCookie(t testing.TB, store sessions.Store, username string, currentSchema bool) *http.Cookie {
 	t.Helper()
-	claims := oidcencoding.Claims{"sub": username}
+	expiresAt := time.Now().Add(time.Hour)
+	if !currentSchema {
+		expiresAt = time.Time{}
+	}
+	return oidcSessionCookieWithExpiry(t, store, username, expiresAt)
+}
+
+func oidcSessionCookieWithExpiry(t testing.TB, store sessions.Store, username string, expiresAt time.Time) *http.Cookie {
+	t.Helper()
+	claims := oidcencoding.Claims{
+		"iss": "https://issuer.example",
+		"sub": username,
+	}
 	data, err := json.Marshal(claims)
 	require.NoError(t, err)
 	return sessionCookie(t, store, auth.OIDCAuthSessionName, map[any]any{
 		auth.IDTokenClaimsSessionKey: string(data),
 	}, func(session *sessions.Session) {
-		if currentSchema {
-			auth.MarkOIDCSessionClaimsCurrent(session)
+		if !expiresAt.IsZero() {
+			auth.MarkOIDCSessionClaimsCurrent(session, expiresAt)
 		}
 	})
 }

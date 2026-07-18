@@ -333,6 +333,13 @@ func TestOIDCProviderValidateHTTPSOrLoopback(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "provider issuer may keep trailing slash",
+			mut: func(p *config.OIDCProvider) {
+				p.URL = "https://idp.example/tenant/"
+			},
+			want: true,
+		},
+		{
 			name: "http loopback provider and callback",
 			mut: func(p *config.OIDCProvider) {
 				p.URL = "http://127.0.0.1:5556"
@@ -357,6 +364,25 @@ func TestOIDCProviderValidateHTTPSOrLoopback(t *testing.T) {
 			mut: func(p *config.OIDCProvider) {
 				p.CallbackBaseURL = ""
 				p.CallbackBaseURLs = []string{"https://lakefs.example", "http://127.0.0.1:8000"}
+			},
+		},
+		{
+			name: "provider issuer query rejected",
+			mut: func(p *config.OIDCProvider) {
+				p.URL = "https://idp.example?tenant=one"
+			},
+		},
+		{
+			name: "provider issuer fragment rejected",
+			mut: func(p *config.OIDCProvider) {
+				p.URL = "https://idp.example#issuer"
+			},
+		},
+		{
+			name: "plural callback path rejected",
+			mut: func(p *config.OIDCProvider) {
+				p.CallbackBaseURL = ""
+				p.CallbackBaseURLs = []string{"https://lakefs.example/base"}
 			},
 		},
 	}

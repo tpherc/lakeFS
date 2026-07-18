@@ -6,9 +6,11 @@ import (
 	"crypto/rsa"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	capoidc "github.com/hashicorp/cap/oidc"
 	"github.com/stretchr/testify/require"
@@ -128,6 +130,32 @@ func TestCAPOIDCClientDiscoversEndSessionEndpoint(t *testing.T) {
 	t.Cleanup(client.Close)
 
 	require.Equal(t, "https://idp.example.com/logout?existing=true", client.EndSessionEndpoint())
+}
+
+func TestBoundedRoundTripperKeepsContextUntilBodyIsConsumed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		time.Sleep(20 * time.Millisecond)
+		_, _ = w.Write([]byte("metadata"))
+	}))
+	t.Cleanup(server.Close)
+
+	client := http.Client{
+		Transport: &boundedRoundTripper{
+			next:    http.DefaultTransport,
+			timeout: time.Second,
+		},
+	}
+	resp, err := client.Get(server.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, "metadata", string(body))
 }
 
 func TestSupportedOIDCSigningAlgs(t *testing.T) {

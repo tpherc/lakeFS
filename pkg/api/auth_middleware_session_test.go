@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/gorilla/sessions"
@@ -67,8 +68,8 @@ func TestOIDCSessionReissueOnlyWhenEncodingUpgradeNeeded(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		session.Values[auth.IDTokenClaimsSessionKey] = `{"sub":"oidc-user"}`
-		auth.MarkOIDCSessionClaimsCurrent(session)
+		session.Values[auth.IDTokenClaimsSessionKey] = `{"iss":"https://issuer.example","sub":"oidc-user"}`
+		auth.MarkOIDCSessionClaimsCurrent(session, time.Now().Add(time.Hour))
 		if err := auth.SaveSession(req, rec, session); err != nil {
 			t.Fatal(err)
 		}

@@ -20,7 +20,7 @@ func NewAuthenticationService(ctx context.Context, c config.Config, logger loggi
 			baseAuthCfg.AuthenticationAPI.ExternalPrincipalsEnabled)
 	}
 	if baseAuthCfg.Providers.OIDC.IsConfigured() {
-		return NewOIDCService(ctx, *baseAuthCfg.Providers.OIDC, baseAuthCfg.OIDC, logger)
+		return NewOIDCService(ctx, *baseAuthCfg.Providers.OIDC, baseAuthCfg.OIDC, baseAuthCfg.LoginDuration, logger)
 	}
 	return NewDummyService(), nil
 }

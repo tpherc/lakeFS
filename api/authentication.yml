@@ -418,9 +418,7 @@ paths:
       security: []
       responses:
         302:
-          description: successfully got token
-        401:
-          description: failed to exchange authorization code for token
+          description: redirects after successful callback or back to login on callback failure
         default:
           $ref: "#/components/responses/ServerError"
   /healthcheck:

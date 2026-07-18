@@ -23,7 +23,7 @@ func TestNewLoginConfigUsesOIDCAsPrimaryLoginURL(t *testing.T) {
 	require.Equal(t, authentication.OIDCLoginPath, loginConfig.LoginUrl)
 	require.NotNil(t, loginConfig.LoginUrlMethod)
 	require.Equal(t, config.AuthLoginURLMethodRedirect, *loginConfig.LoginUrlMethod)
-	require.True(t, slices.Contains(loginConfig.LoginCookieNames, auth.OIDCAuthSessionName))
+	require.False(t, slices.Contains(loginConfig.LoginCookieNames, auth.OIDCAuthSessionName))
 	require.Nil(t, loginConfig.FallbackLoginUrl)
 }
 

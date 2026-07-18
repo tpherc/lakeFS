@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -30,11 +31,7 @@ func (p *OIDCProvider) Validate() error {
 	case p.CallbackBaseURL == "" && len(p.CallbackBaseURLs) == 0:
 		return fmt.Errorf("%w: auth.providers.oidc.callback_base_url or callback_base_urls is required", ErrBadConfiguration)
 	}
-	issuerURL, err := httputil.NormalizeBaseURL(p.URL)
-	if err != nil {
-		return fmt.Errorf("%w: invalid auth.providers.oidc.url: %s", ErrBadConfiguration, err)
-	}
-	if err := validateOIDCPublicBaseURL("auth.providers.oidc.url", issuerURL); err != nil {
+	if err := validateOIDCIssuerURL(p.URL); err != nil {
 		return err
 	}
 	if p.CallbackBaseURL != "" {
@@ -53,6 +50,9 @@ func (p *OIDCProvider) Validate() error {
 			return fmt.Errorf("%w: invalid auth.providers.oidc.callback_base_urls entry: %s", ErrBadConfiguration, err)
 		}
 		if err := validateOIDCPublicBaseURL("auth.providers.oidc.callback_base_urls entry", baseURL); err != nil {
+			return err
+		}
+		if err := validateOIDCCallbackOrigin("auth.providers.oidc.callback_base_urls entry", baseURL); err != nil {
 			return err
 		}
 		usesHTTPS, _ := httputil.BaseURLUsesHTTPS(baseURL)
@@ -162,4 +162,36 @@ var reservedOIDCAuthorizeEndpointQueryParameters = map[string]struct{}{
 	"response_type":         {},
 	"scope":                 {},
 	"state":                 {},
+}
+
+func validateOIDCIssuerURL(raw string) error {
+	issuer := strings.TrimSpace(raw)
+	parsed, err := url.Parse(issuer)
+	if err != nil {
+		return fmt.Errorf("%w: invalid auth.providers.oidc.url: %s", ErrBadConfiguration, err)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("%w: auth.providers.oidc.url must include a host", ErrBadConfiguration)
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("%w: auth.providers.oidc.url must not include user info", ErrBadConfiguration)
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("%w: auth.providers.oidc.url must not include query or fragment", ErrBadConfiguration)
+	}
+	if err := validateOIDCPublicBaseURL("auth.providers.oidc.url", issuer); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateOIDCCallbackOrigin(name, baseURL string) error {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return fmt.Errorf("%w: invalid %s: %s", ErrBadConfiguration, name, err)
+	}
+	if parsed.EscapedPath() != "" {
+		return fmt.Errorf("%w: %s must not include a path", ErrBadConfiguration, name)
+	}
+	return nil
 }

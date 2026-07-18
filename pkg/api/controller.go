@@ -5491,15 +5491,6 @@ func newLoginConfig(c config.AuthConfig) *apigen.LoginConfig {
 		LoginCookieNames:   append([]string(nil), authUICfg.LoginCookieNames...),
 		LogoutUrl:          authUICfg.LogoutURL,
 	}
-	if oidcConfigured {
-		if !slices.Contains(loginConfig.LoginCookieNames, auth.OIDCAuthSessionName) {
-			loginConfig.LoginCookieNames = append(loginConfig.LoginCookieNames, auth.OIDCAuthSessionName)
-		}
-		if loginConfig.FallbackLoginUrl == nil && loginConfig.LoginUrl == "" {
-			loginConfig.FallbackLoginUrl = apiutil.Ptr(authentication.OIDCLoginPath)
-			loginConfig.FallbackLoginLabel = apiutil.Ptr("Sign in with SSO provider")
-		}
-	}
 	if c.UseUILoginPlaceholders() {
 		loginConfig.UsernameUiPlaceholder = swag.String(usernamePlaceholder)
 		loginConfig.PasswordUiPlaceholder = swag.String(passwordPlaceholder)

@@ -27,12 +27,13 @@ type OIDCService struct {
 	oidc                 oidcProtocolClient
 	callbacks            oidcCallbackResolver
 	userClaimsConfig     config.OIDC
+	sessionDuration      time.Duration
 	postLoginRedirectURL string
 	logoutRedirect       oidcLogoutRedirect
 	logger               logging.Logger
 }
 
-func NewOIDCService(ctx context.Context, providerConfig config.OIDCProvider, userClaimsConfig config.OIDC, logger logging.Logger) (*OIDCService, error) {
+func NewOIDCService(ctx context.Context, providerConfig config.OIDCProvider, userClaimsConfig config.OIDC, sessionDuration time.Duration, logger logging.Logger) (*OIDCService, error) {
 	oidcClient, err := newCAPOIDCClient(ctx, providerConfig)
 	if err != nil {
 		return nil, err
@@ -46,6 +47,7 @@ func NewOIDCService(ctx context.Context, providerConfig config.OIDCProvider, use
 		oidc:                 oidcClient,
 		callbacks:            callbacks,
 		userClaimsConfig:     userClaimsConfig,
+		sessionDuration:      sessionDuration,
 		postLoginRedirectURL: providerConfig.PostLoginRedirectURL,
 		logoutRedirect:       newOIDCLogoutRedirect(providerConfig, oidcClient.EndSessionEndpoint()),
 		logger:               logger.WithField("service", "oidc_authentication"),
@@ -95,11 +97,6 @@ func (s *OIDCService) OauthCallback(w http.ResponseWriter, r *http.Request, sess
 	}
 
 	state := r.URL.Query().Get("state")
-	if state == "" || state != transaction.StateValue {
-		s.logger.Warn("OIDC callback state mismatch")
-		redirectToLogin(w, r)
-		return
-	}
 	if err := transaction.validateCallbackState(state, time.Now()); err != nil {
 		s.logger.WithError(err).Warn("OIDC callback transaction validation failed")
 		s.saveClearedTransaction(oidcSession)
@@ -140,12 +137,13 @@ func (s *OIDCService) OauthCallback(w http.ResponseWriter, r *http.Request, sess
 		redirectToLogin(w, r)
 		return
 	}
-	if err := oidcSession.SaveClaims(normalizedClaims); err != nil {
+	expiresAt := time.Now().Add(s.sessionDuration)
+	if err := oidcSession.SaveClaims(normalizedClaims, expiresAt); err != nil {
 		s.logger.WithError(err).Error("failed to save OIDC session")
 		redirectToLogin(w, r)
 		return
 	}
-	http.Redirect(w, r, s.postLoginTarget(transaction.Next), http.StatusTemporaryRedirect)
+	http.Redirect(w, r, s.postLoginTarget(transaction.Next), http.StatusFound)
 }
 
 func (s *OIDCService) loginHandler(sessionStore sessions.Store) http.HandlerFunc {
@@ -214,7 +212,7 @@ func (s *OIDCService) saveClearedTransaction(session *oidcSession) {
 }
 
 func redirectToLogin(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "/auth/login", http.StatusTemporaryRedirect)
+	http.Redirect(w, r, "/auth/login", http.StatusFound)
 }
 
 func normalizeOIDCClaims(claims encoding.Claims, cfg config.OIDC) (encoding.Claims, error) {
@@ -222,9 +220,13 @@ func normalizeOIDCClaims(claims encoding.Claims, cfg config.OIDC) (encoding.Clai
 	if !ok || sub == "" {
 		return nil, fmt.Errorf("%w: OIDC claims missing subject", ErrInvalidRequest)
 	}
-	normalized := encoding.Claims{"sub": sub}
-	if issuer, ok := claims["iss"].(string); ok && issuer != "" {
-		normalized["iss"] = issuer
+	issuer, ok := claims["iss"].(string)
+	if !ok || issuer == "" {
+		return nil, fmt.Errorf("%w: OIDC claims missing issuer", ErrInvalidRequest)
+	}
+	normalized := encoding.Claims{
+		"iss": issuer,
+		"sub": sub,
 	}
 	copyConfiguredClaim(normalized, claims, cfg.FriendlyNameClaimName)
 	copyConfiguredClaim(normalized, claims, cfg.EmailClaimName)
