@@ -11,3 +11,19 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+Third-Party Software
+
+This product includes HashiCorp CAP v0.13.0.
+
+Copyright (c) 2020 HashiCorp, Inc.
+
+HashiCorp CAP is licensed under the Mozilla Public License,
+version 2.0 (MPL-2.0). A copy of the license is provided in:
+
+    LICENSES/MPL-2.0.txt
+
+The corresponding source code for the version included in this
+product is available at:
+
+    https://github.com/hashicorp/cap/tree/v0.13.0
