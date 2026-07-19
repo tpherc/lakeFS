@@ -22,7 +22,7 @@
 	<a href="https://github.com/treeverse/lakeFS/actions/workflows/test.yaml?query=branch%3Amaster">
 		<img src="https://github.com/treeverse/lakeFS/workflows/Test/badge.svg?branch=master" alt="Go tests status" /></a>
 	<a href="https://github.com/treeverse/lakeFS/actions/workflows/node.yaml?query=branch%3Amaster" >
-		<img src="https://github.com/treeverse/lakeFS/workflows/Node/badge.svg?branch=master" alt="Node tests status" /></a>
+		<img src="https://github.com/treeverse/lakeFS/workflows/Node/badge.svg?query=branch%3Amaste" alt="Node tests status" /></a>
 	<a href="https://github.com/treeverse/lakeFS/actions/workflows/esti.yaml?query=branch%3Amaster">
 		<img src="https://github.com/treeverse/lakeFS/workflows/Esti/badge.svg?branch=master" alt="Integration tests status" /></a>
 	<a href="https://artifacthub.io/packages/search?repo=lakefs">
