@@ -146,7 +146,11 @@ func (m *Manager) getRepository(ctx context.Context, repositoryID graveler.Repos
 		return nil, err
 	}
 	repo := graveler.RepoFromProto(&data)
-	repo.StorageID = graveler.StorageID(config.GetActualStorageID(m.storageConfig, repo.StorageID.String()))
+	storageID, err := m.storageConfig.ResolveStoredRepositoryStorageID(repo.StorageID.String())
+	if err != nil {
+		return nil, fmt.Errorf("repository %q storage id %q: %w", repositoryID, repo.StorageID, err)
+	}
+	repo.StorageID = graveler.StorageID(storageID)
 
 	return repo, nil
 }

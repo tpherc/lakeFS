@@ -12,6 +12,7 @@ import (
 	"github.com/treeverse/lakefs/pkg/block/gs"
 	"github.com/treeverse/lakefs/pkg/block/local"
 	"github.com/treeverse/lakefs/pkg/block/mem"
+	"github.com/treeverse/lakefs/pkg/block/multi"
 	"github.com/treeverse/lakefs/pkg/block/params"
 	s3a "github.com/treeverse/lakefs/pkg/block/s3"
 	"github.com/treeverse/lakefs/pkg/block/transient"
@@ -90,6 +91,25 @@ func BuildBlockAdapter(ctx context.Context, statsCollector stats.Collector, c co
 		return nil, fmt.Errorf("%w '%s' please choose one of %s",
 			block.ErrInvalidAddress, blockstore, []string{block.BlockstoreTypeLocal, block.BlockstoreTypeS3, block.BlockstoreTypeAzure, block.BlockstoreTypeMem, block.BlockstoreTypeTransient, block.BlockstoreTypeGS})
 	}
+}
+
+// BuildStorageAdapters builds one concrete block adapter per configured
+// storage ID without adding metrics or routing layers.
+func BuildStorageAdapters(ctx context.Context, statsCollector stats.Collector, storageConfig config.StorageConfig, opts ...BuildOption) (map[string]block.Adapter, error) {
+	storageIDs := storageConfig.GetStorageIDs()
+	adapters := make(map[string]block.Adapter, len(storageIDs))
+	for _, storageID := range storageIDs {
+		adapterConfig := storageConfig.GetStorageByID(storageID)
+		if adapterConfig == nil {
+			return nil, fmt.Errorf("storage id %q: %w", storageID, config.ErrNoStorageConfig)
+		}
+		adapter, err := BuildBlockAdapter(ctx, statsCollector, adapterConfig, opts...)
+		if err != nil {
+			return nil, err
+		}
+		adapters[storageID] = adapter
+	}
+	return adapters, nil
 }
 
 func buildLocalAdapter(ctx context.Context, params params.Local, adapterOpts ...func(*local.Adapter)) (*local.Adapter, error) {
@@ -184,9 +204,14 @@ func BuildSingleGSAdapter(ctx context.Context, params params.GS, adapterOpts ...
 
 // BuildBlockAdapterWithMetrics creates a block adapter from a Config and wraps it with metrics collection.
 func BuildBlockAdapterWithMetrics(ctx context.Context, statsCollector stats.Collector, c config.Config) (block.Adapter, error) {
-	adapter, err := BuildBlockAdapter(ctx, statsCollector, c.StorageConfig().GetStorageByID(config.SingleBlockstoreID))
+	storageConfig := c.StorageConfig()
+	adapters, err := BuildStorageAdapters(ctx, statsCollector, storageConfig)
 	if err != nil {
 		return nil, err
 	}
-	return block.NewMetricsAdapter(adapter), nil
+	metricsWrapped := make(map[string]block.Adapter, len(adapters))
+	for storageID, adapter := range adapters {
+		metricsWrapped[storageID] = block.NewMetricsAdapter(adapter)
+	}
+	return multi.BuildMultiStorageAdapter(storageConfig, metricsWrapped)
 }

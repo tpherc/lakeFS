@@ -1331,12 +1331,11 @@ class Config {
 
         const buildStoragesConfigs = (cfg) => {
             const storageCfgList = cfg['storage_config_list'];
-            if (storageCfgList?.length > 1) {
+            if (storageCfgList?.length) {
                 return storageCfgList.map((storageCfg) => parseBlockstoreConfig(storageCfg));
-            } else {
-                const storageCfg = cfg['storage_config'];
-                return [parseBlockstoreConfig(storageCfg)];
             }
+            const storageCfg = cfg['storage_config'];
+            return storageCfg ? [parseBlockstoreConfig(storageCfg)] : [];
         };
 
         switch (response.status) {

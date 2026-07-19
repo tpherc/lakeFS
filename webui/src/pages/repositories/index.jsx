@@ -97,7 +97,7 @@ const CreateRepositoryModal = ({ show, error, onSubmit, onCancel, inProgress }) 
             <Modal.Body>
                 <RepositoryCreateForm
                     formID="repository-create-form"
-                    config={config?.storages?.[0]}
+                    configs={config?.storages}
                     error={showError}
                     formValid={formValid}
                     setFormValid={setFormValid}
@@ -301,7 +301,7 @@ const RepositoriesPage = () => {
     );
 
     const { config, error: err, loading } = useConfigContext();
-    const storageConfigs = config?.storages;
+    const storageConfigs = config?.storages ?? [];
 
     const createRepo = async (repo, presentRepo = true) => {
         try {
@@ -337,13 +337,15 @@ const RepositoriesPage = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [showCreateRepositoryModal, setShowCreateRepositoryModal]);
 
-    const allowSampleRepoCreation = true;
+    const allowSampleRepoCreation =
+        !err && storageConfigs.length === 1 && storageConfigs[0]?.blockstore_type === LOCAL_BLOCKSTORE_TYPE;
     const createSampleRepoButtonCallback = useCallback(async () => {
         if (loading) return;
         // note that this is only called on a single storage config server
         if (!err && storageConfigs.length && storageConfigs[0]?.blockstore_type === LOCAL_BLOCKSTORE_TYPE) {
             const sampleRepo = {
                 name: LOCAL_BLOCKSTORE_SAMPLE_REPO_NAME,
+                storage_id: storageConfigs[0]?.blockstore_id ?? '',
                 storage_namespace: `local://${LOCAL_BLOCKSTORE_SAMPLE_REPO_NAME}`,
                 default_branch: LOCAL_BLOCKSTORE_SAMPLE_REPO_DEFAULT_BRANCH,
                 sample_data: true,

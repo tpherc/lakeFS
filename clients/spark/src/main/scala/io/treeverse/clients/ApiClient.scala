@@ -150,7 +150,7 @@ class ApiClient private (conf: APIConfigurations) {
   private val metadataApi = new sdk.MetadataApi(client)
   private val branchesApi = new sdk.BranchesApi(client)
   private var internalApi = new sdk.InternalApi(client)
-  private val configApi = new ConfigApi(client)
+  private var configApi = new ConfigApi(client)
 
   private val retryWrapper = new RequestRetryWrapper(client.getReadTimeout)
 
@@ -321,14 +321,18 @@ class ApiClient private (conf: APIConfigurations) {
       def get(): StorageConfig = {
         val cfg = configApi.getConfig.execute()
         val storageConfigList = cfg.getStorageConfigList
-        if (storageConfigList.isEmpty || storageConfigList.size() == 1) {
-          cfg.getStorageConfig
+        if (storageConfigList != null && !storageConfigList.isEmpty) {
+          if (storageConfigList.size() == 1) {
+            storageConfigList.get(0)
+          } else {
+            storageConfigList.asScala
+              .find(_.getBlockstoreId == storageID)
+              .getOrElse(
+                throw new IllegalArgumentException(s"Storage config not found for ID: $storageID")
+              )
+          }
         } else {
-          storageConfigList.asScala
-            .find(_.getBlockstoreId == storageID)
-            .getOrElse(
-              throw new IllegalArgumentException(s"Storage config not found for ID: $storageID")
-            )
+          cfg.getStorageConfig
         }
       }
     }
@@ -396,6 +400,10 @@ class ApiClient private (conf: APIConfigurations) {
    */
   private[clients] def setInternalApiForTesting(newInternalApi: sdk.InternalApi): Unit = {
     internalApi = newInternalApi
+  }
+
+  private[clients] def setConfigApiForTesting(newConfigApi: ConfigApi): Unit = {
+    configApi = newConfigApi
   }
 
   // Instances of case classes are compared by structure and not by reference https://docs.scala-lang.org/tour/case-classes.html.

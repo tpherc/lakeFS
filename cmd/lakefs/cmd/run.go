@@ -143,6 +143,10 @@ var runCmd = &cobra.Command{
 			ErrorToStatusCodeAndMsg: api.ErrorToStatusAndMsg,
 		}
 
+		if err := ref.ValidateRepositoryStorageIDs(ctx, kvStore, cfg.StorageConfig()); err != nil {
+			logger.WithError(err).Fatal("storage configuration validation failed")
+		}
+
 		c, err := catalog.New(ctx, catalogConfig)
 		if err != nil {
 			logger.WithError(err).Fatal("failed to create catalog")

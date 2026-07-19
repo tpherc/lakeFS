@@ -1,3 +1,6 @@
+import lakefs_sdk
+import pytest
+
 from lakefs.exceptions import NoAuthenticationFound
 from tests.utests.common import (
     lakectl_test_config_context,
@@ -19,6 +22,61 @@ TEST_CONFIG_KWARGS: dict[str, str] = {
 
 
 class TestClient:
+    def test_client_storage_config_prefers_single_entry_list(self, monkeypatch):
+        storage = lakefs_sdk.StorageConfig(
+            blockstore_id="alpha",
+            blockstore_type="s3",
+            blockstore_namespace_example="s3://bucket/",
+            blockstore_namespace_ValidityRegex="^s3://",
+            pre_sign_support=True,
+            pre_sign_support_ui=False,
+            import_support=True,
+            import_validity_regex="^s3://",
+        )
+        server_config = lakefs_sdk.Config(storage_config=None, storage_config_list=[storage])
+        monkeypatch.setattr(lakefs_sdk.api.ConfigApi, "get_config", lambda *_: server_config)
+
+        from lakefs.client import Client
+        clt = Client(**TEST_CONFIG_KWARGS)
+
+        assert clt.storage_config_by_id("alpha").blockstore_type == "s3"
+        assert clt.storage_config.blockstore_type == "s3"
+        assert clt.storage_config_by_id().blockstore_type == "s3"
+
+    def test_client_storage_config_prefers_multi_entry_list(self, monkeypatch):
+        alpha = lakefs_sdk.StorageConfig(
+            blockstore_id="alpha",
+            blockstore_type="s3",
+            blockstore_namespace_example="s3://bucket/",
+            blockstore_namespace_ValidityRegex="^s3://",
+            pre_sign_support=True,
+            pre_sign_support_ui=False,
+            import_support=True,
+            import_validity_regex="^s3://",
+        )
+        beta = lakefs_sdk.StorageConfig(
+            blockstore_id="beta",
+            blockstore_type="azure",
+            blockstore_namespace_example="https://account.blob.core.windows.net/container/",
+            blockstore_namespace_ValidityRegex="^https://",
+            pre_sign_support=True,
+            pre_sign_support_ui=True,
+            import_support=False,
+            import_validity_regex="",
+        )
+        server_config = lakefs_sdk.Config(storage_config=None, storage_config_list=[alpha, beta])
+        monkeypatch.setattr(lakefs_sdk.api.ConfigApi, "get_config", lambda *_: server_config)
+
+        from lakefs.client import Client
+        clt = Client(**TEST_CONFIG_KWARGS)
+
+        assert clt.storage_config_by_id("alpha").blockstore_type == "s3"
+        assert clt.storage_config_by_id("beta").blockstore_type == "azure"
+        with pytest.raises(KeyError):
+            clt.storage_config_by_id()
+        with pytest.raises(KeyError):
+            clt.storage_config
+
     def test_client_no_config(self, monkeypatch):
         with lakectl_no_config_context(monkeypatch) as client:
             with expect_exception_context(NoAuthenticationFound):

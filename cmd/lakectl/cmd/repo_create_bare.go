@@ -22,6 +22,7 @@ var repoCreateBareCmd = &cobra.Command{
 		fmt.Println("Repository:", u)
 
 		defaultBranch := Must(cmd.Flags().GetString(defaultBranchFlagName))
+		storageID := Must(cmd.Flags().GetString(storageIDFlagName))
 
 		bareRepo := true
 
@@ -30,6 +31,7 @@ var repoCreateBareCmd = &cobra.Command{
 		}, apigen.CreateRepositoryJSONRequestBody{
 			DefaultBranch:    &defaultBranch,
 			Name:             u.Repository,
+			StorageId:        &storageID,
 			StorageNamespace: args[1],
 		})
 		DieOnErrorOrUnexpectedStatusCode(resp, err, http.StatusCreated)
@@ -44,6 +46,7 @@ var repoCreateBareCmd = &cobra.Command{
 //nolint:gochecknoinits
 func init() {
 	repoCreateBareCmd.Flags().StringP(defaultBranchFlagName, "d", defaultBranchFlagValue, "the default branch name of this repository (will not be created)")
+	withStorageID(repoCreateBareCmd)
 
 	repoCmd.AddCommand(repoCreateBareCmd)
 }

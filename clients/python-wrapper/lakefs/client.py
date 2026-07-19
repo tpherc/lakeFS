@@ -34,14 +34,13 @@ class ServerConfiguration:
     _storage_conf: dict[str, ServerStorageConfiguration] = {}
 
     def __init__(self, client: Client):
+        self._storage_conf = {}
         try:
             self._conf = client.sdk_client.config_api.get_config()
-            if self._conf.storage_config_list is not None:
+            if self._conf.storage_config_list:
                 for storage in self._conf.storage_config_list:
-                    if self._conf.storage_config is not None:
-                        self._storage_conf[storage.blockstore_id] = ServerStorageConfiguration(
-                            **self._conf.storage_config.dict())
-            if self._conf.storage_config is not None:
+                    self._storage_conf[storage.blockstore_id] = ServerStorageConfiguration(**storage.dict())
+            elif self._conf.storage_config is not None:
                 self._storage_conf[SINGLE_STORAGE_ID] = ServerStorageConfiguration(**self._conf.storage_config.dict())
 
         except lakefs_sdk.exceptions.ApiException as e:
@@ -69,6 +68,8 @@ class ServerConfiguration:
         """
         Returns the lakeFS server storage configuration by ID
         """
+        if storage_id == SINGLE_STORAGE_ID and len(self._storage_conf) == 1:
+            return next(iter(self._storage_conf.values()))
         return self._storage_conf[storage_id]
 
 class Client:

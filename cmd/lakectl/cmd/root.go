@@ -158,6 +158,7 @@ var (
 const (
 	recursiveFlagName     = "recursive"
 	recursiveFlagShort    = "r"
+	storageIDFlagName     = "storage-id"
 	presignFlagName       = "pre-sign"
 	parallelismFlagName   = "parallelism"
 	noProgressBarFlagName = "no-progress"
@@ -209,6 +210,13 @@ func withRecursiveFlag(cmd *cobra.Command, usage string) {
 	cmd.Flags().BoolP(recursiveFlagName, recursiveFlagShort, false, usage)
 }
 
+func withStorageID(cmd *cobra.Command) {
+	cmd.Flags().String(storageIDFlagName, "", "")
+	if err := cmd.Flags().MarkHidden(storageIDFlagName); err != nil {
+		DieErr(err)
+	}
+}
+
 func withParallelismFlag(cmd *cobra.Command) {
 	cmd.Flags().IntP(parallelismFlagName, "p", defaultParallelism,
 		"Max concurrent operations to perform")
@@ -238,22 +246,28 @@ func getStorageConfigOrDie(ctx context.Context, client *apigen.ClientWithRespons
 	}
 
 	storageConfigList := confResp.JSON200.StorageConfigList
-	if storageConfigList != nil && len(*storageConfigList) > 1 {
-		repoResp, errRepo := client.GetRepositoryWithResponse(ctx, repositoryID)
-		DieOnErrorOrUnexpectedStatusCode(repoResp, errRepo, http.StatusOK)
-		if repoResp.JSON200 == nil {
-			Die("Bad response from server for GetRepository", 1)
-		}
-		storageID := repoResp.JSON200.StorageId
-
-		// find the storage config for the repository
-		for _, storageConfig := range *storageConfigList {
-			if swag.StringValue(storageConfig.BlockstoreId) == swag.StringValue(storageID) {
-				return &storageConfig
+	if storageConfigList != nil {
+		switch len(*storageConfigList) {
+		case 0:
+		case 1:
+			return &(*storageConfigList)[0]
+		default:
+			repoResp, errRepo := client.GetRepositoryWithResponse(ctx, repositoryID)
+			DieOnErrorOrUnexpectedStatusCode(repoResp, errRepo, http.StatusOK)
+			if repoResp.JSON200 == nil {
+				Die("Bad response from server for GetRepository", 1)
 			}
-		}
+			storageID := repoResp.JSON200.StorageId
 
-		Die("Storage config not found for repo "+repositoryID, 1)
+			// find the storage config for the repository
+			for _, storageConfig := range *storageConfigList {
+				if swag.StringValue(storageConfig.BlockstoreId) == swag.StringValue(storageID) {
+					return &storageConfig
+				}
+			}
+
+			Die("Storage config not found for repo "+repositoryID, 1)
+		}
 	}
 
 	storageConfig := confResp.JSON200.StorageConfig
