@@ -9,7 +9,6 @@ import { useRouter } from '../../lib/hooks/router';
 import { resolveUserDisplayName } from '../../lib/utils';
 import { useAuth } from '../../lib/auth/authContext';
 import { useLoginConfigContext } from '../../lib/hooks/conf';
-import { FeatureLockedEmptyState } from '../../lib/components/auth/enterpriseUpgrade';
 
 const CredentialsContainer = () => {
     const router = useRouter();
@@ -103,7 +102,7 @@ const CredentialsPage = () => {
     const { RBAC: rbac } = useLoginConfigContext();
     useEffect(() => setActiveTab('credentials'), [setActiveTab]);
     if (rbac === 'none') {
-        return <FeatureLockedEmptyState feature="credentials" />;
+        return <div className="p-4 text-center text-muted">Feature disabled</div>;
     }
     return <CredentialsContainer />;
 };
