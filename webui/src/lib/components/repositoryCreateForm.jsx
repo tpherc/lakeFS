@@ -4,18 +4,16 @@ import Alert from 'react-bootstrap/Alert';
 import { Warnings } from './controls';
 import { FloatingLabel } from 'react-bootstrap';
 import Accordion from 'react-bootstrap/Accordion';
+import { getRepositoryStorageConfigs, getSelectedRepositoryStorageConfig } from './repositoryCreateFormStorage';
 
 const DEFAULT_BLOCKSTORE_EXAMPLE = 'e.g. s3://example-bucket/';
 const DEFAULT_BLOCKSTORE_VALIDITY_REGEX = new RegExp(`^s3://`);
 
 export const RepositoryCreateForm = ({ formID, config, configs, onSubmit, formValid, setFormValid, error = null }) => {
     const repoValidityRegex = /^[a-z0-9][a-z0-9-]{2,62}$/;
-    const storageConfigs = configs?.length ? configs : config ? [config] : [];
+    const storageConfigs = getRepositoryStorageConfigs(config, configs);
     const [selectedStorageID, setSelectedStorageID] = useState(storageConfigs[0]?.blockstore_id || '');
-    const selectedConfig =
-        storageConfigs.find((storageConfig) => storageConfig.blockstore_id === selectedStorageID) ||
-        storageConfigs[0] ||
-        {};
+    const selectedConfig = getSelectedRepositoryStorageConfig(storageConfigs, selectedStorageID);
     const multiStorage = storageConfigs.length > 1;
 
     const [repoValid, setRepoValid] = useState(null);
@@ -213,7 +211,7 @@ export const RepositoryCreateForm = ({ formID, config, configs, onSubmit, formVa
 
             {creationForm}
 
-            {config?.warnings && <Warnings warnings={config.warnings} />}
+            {selectedConfig?.warnings?.length > 0 && <Warnings warnings={selectedConfig.warnings} />}
 
             {error && (
                 <div className="mb-3">

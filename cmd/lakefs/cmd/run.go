@@ -143,15 +143,15 @@ var runCmd = &cobra.Command{
 			ErrorToStatusCodeAndMsg: api.ErrorToStatusAndMsg,
 		}
 
+		if err := ref.ValidateRepositoryStorageIDs(ctx, kvStore, cfg.StorageConfig()); err != nil {
+			logger.WithError(err).Fatal("storage configuration validation failed")
+		}
+
 		c, err := catalog.New(ctx, catalogConfig)
 		if err != nil {
 			logger.WithError(err).Fatal("failed to create catalog")
 		}
 		defer func() { _ = c.Close() }()
-
-		if err := ref.ValidateRepositoryStorageIDs(ctx, kvStore, cfg.StorageConfig()); err != nil {
-			logger.WithError(err).Fatal("storage configuration validation failed")
-		}
 
 		// Setup usage reporter - it is no longer possible to disable it
 		usageReporter := stats.NewUsageReporter(metadata.InstallationID, kvStore)
