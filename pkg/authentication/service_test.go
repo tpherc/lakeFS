@@ -126,7 +126,7 @@ func NewTestApiService(t *testing.T, validateIDTokenClaims map[string]string, ex
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	mockClient := mock.NewMockClientWithResponsesInterface(ctrl)
-	s, err := authentication.NewAPIServiceWithClients(mockClient, logging.ContextUnavailable(), validateIDTokenClaims, externalPrincipalsEnabled)
+	s, err := authentication.NewAPIServiceWithClients(mockClient, logging.ContextUnavailable(), validateIDTokenClaims, externalPrincipalsEnabled, "/auth/login")
 	if err != nil {
 		t.Fatalf("failed initiating API service with mock")
 	}
@@ -168,7 +168,7 @@ func TestAPIService_RequestIDPropagation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	service, err := authentication.NewAPIService(server.URL, nil, logging.ContextUnavailable(), false)
+	service, err := authentication.NewAPIService(server.URL, nil, logging.ContextUnavailable(), false, "/auth/login")
 	require.NoError(t, err)
 
 	ctx := context.WithValue(t.Context(), httputil.RequestIDContextKey, requestID)

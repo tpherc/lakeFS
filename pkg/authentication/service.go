@@ -21,15 +21,17 @@ type Service interface {
 	ExternalPrincipalLogin(ctx context.Context, identityRequest map[string]any) (*apiclient.ExternalPrincipal, error)
 	// ValidateSTS validates the STS parameters and returns the external user ID
 	ValidateSTS(ctx context.Context, code, redirectURI, state string) (string, error)
-	LogoutRedirectURL(ctx context.Context, fallbackURL string) (string, error)
+	LogoutRedirectURL() string
 	RegisterAdditionalRoutes(r *chi.Mux, sessionStore sessions.Store)
 	OauthCallback(w http.ResponseWriter, r *http.Request, sessionStore sessions.Store)
 }
 
-type DummyService struct{}
+type DummyService struct {
+	logoutRedirectURL string
+}
 
-func NewDummyService() *DummyService {
-	return &DummyService{}
+func NewDummyService(logoutRedirectURL string) *DummyService {
+	return &DummyService{logoutRedirectURL: logoutRedirectURL}
 }
 
 func (d DummyService) ValidateSTS(ctx context.Context, code, redirectURI, state string) (string, error) {
@@ -44,8 +46,8 @@ func (d DummyService) IsExternalPrincipalsEnabled() bool {
 	return false
 }
 
-func (d DummyService) LogoutRedirectURL(_ context.Context, fallbackURL string) (string, error) {
-	return fallbackURL, nil
+func (d DummyService) LogoutRedirectURL() string {
+	return d.logoutRedirectURL
 }
 
 func (d DummyService) RegisterAdditionalRoutes(_ *chi.Mux, _ sessions.Store) {}
@@ -57,9 +59,10 @@ type APIService struct {
 	apiClient                 apiclient.ClientWithResponsesInterface
 	logger                    logging.Logger
 	externalPrincipalsEnabled bool
+	logoutRedirectURL         string
 }
 
-func NewAPIService(apiEndpoint string, validateIDTokenClaims map[string]string, logger logging.Logger, externalPrincipalsEnabled bool) (*APIService, error) {
+func NewAPIService(apiEndpoint string, validateIDTokenClaims map[string]string, logger logging.Logger, externalPrincipalsEnabled bool, logoutRedirectURL string) (*APIService, error) {
 	client, err := apiclient.NewClientWithResponses(apiEndpoint, apiclient.WithRequestEditorFn(addRequestID(httputil.RequestIDHeaderName)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create authentication api client: %w", err)
@@ -70,16 +73,18 @@ func NewAPIService(apiEndpoint string, validateIDTokenClaims map[string]string, 
 		apiClient:                 client,
 		logger:                    logger,
 		externalPrincipalsEnabled: externalPrincipalsEnabled,
+		logoutRedirectURL:         logoutRedirectURL,
 	}
 	return res, nil
 }
 
-func NewAPIServiceWithClients(apiClient apiclient.ClientWithResponsesInterface, logger logging.Logger, validateIDTokenClaims map[string]string, externalPrincipalsEnabled bool) (*APIService, error) {
+func NewAPIServiceWithClients(apiClient apiclient.ClientWithResponsesInterface, logger logging.Logger, validateIDTokenClaims map[string]string, externalPrincipalsEnabled bool, logoutRedirectURL string) (*APIService, error) {
 	return &APIService{
 		apiClient:                 apiClient,
 		logger:                    logger,
 		validateIDTokenClaims:     validateIDTokenClaims,
 		externalPrincipalsEnabled: externalPrincipalsEnabled,
+		logoutRedirectURL:         logoutRedirectURL,
 	}, nil
 }
 
@@ -158,8 +163,8 @@ func (s *APIService) IsExternalPrincipalsEnabled() bool {
 	return s.externalPrincipalsEnabled
 }
 
-func (s *APIService) LogoutRedirectURL(_ context.Context, fallbackURL string) (string, error) {
-	return fallbackURL, nil
+func (s *APIService) LogoutRedirectURL() string {
+	return s.logoutRedirectURL
 }
 
 func (s *APIService) RegisterAdditionalRoutes(_ *chi.Mux, _ sessions.Store) {

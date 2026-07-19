@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -11,17 +10,14 @@ import (
 
 	"github.com/gorilla/sessions"
 	"github.com/treeverse/lakefs/pkg/auth"
-	"github.com/treeverse/lakefs/pkg/config"
 	"github.com/treeverse/lakefs/pkg/logging"
 )
 
 func TestLogoutHandlerClearsSessionsAndRedirectsToOIDCProviderLogout(t *testing.T) {
-	authConfig := &config.BaseAuth{LogoutRedirectURL: "/auth/login"}
 	handler := NewLogoutHandler(
 		testSessionStore(t),
 		logging.ContextUnavailable(),
-		authConfig,
-		staticLogoutRedirectResolver{url: "https://idp.example.com/logout?client_id=lakefs-client&returnTo=https%3A%2F%2Flakefs.example.com%2Foidc%2Flogin"},
+		"https://idp.example.com/logout?client_id=lakefs-client&returnTo=https%3A%2F%2Flakefs.example.com%2Foidc%2Flogin",
 	)
 
 	recorder := httptest.NewRecorder()
@@ -44,7 +40,7 @@ func TestLogoutHandlerClearsSessionsAndRedirectsToOIDCProviderLogout(t *testing.
 	}
 }
 
-func TestLogoutHandlerAttemptsAllSessionClears(t *testing.T) {
+func TestLogoutHandlerAttemptsAllSessionClearsAndFailsOnAnyError(t *testing.T) {
 	store := &recordingSessionStore{
 		getErrors: map[string]error{
 			auth.InternalAuthSessionName: errors.New("internal store failure"),
@@ -53,16 +49,15 @@ func TestLogoutHandlerAttemptsAllSessionClears(t *testing.T) {
 	handler := NewLogoutHandler(
 		store,
 		logging.ContextUnavailable(),
-		&config.BaseAuth{LogoutRedirectURL: "/auth/login"},
-		nil,
+		"/auth/login",
 	)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/logout", nil)
 	handler.ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusTemporaryRedirect {
-		t.Fatalf("unexpected status: got %d, want %d", recorder.Code, http.StatusTemporaryRedirect)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("unexpected status: got %d, want %d", recorder.Code, http.StatusInternalServerError)
 	}
 	assertEqualStrings(t, store.gets, []string{
 		auth.InternalAuthSessionName,
@@ -75,7 +70,7 @@ func TestLogoutHandlerAttemptsAllSessionClears(t *testing.T) {
 	})
 }
 
-func TestLogoutHandlerFailsOnlyWhenAllSessionClearsFail(t *testing.T) {
+func TestLogoutHandlerFailsWhenAllSessionClearsFail(t *testing.T) {
 	store := &recordingSessionStore{
 		getErrors: map[string]error{
 			auth.InternalAuthSessionName: errors.New("internal store failure"),
@@ -86,8 +81,7 @@ func TestLogoutHandlerFailsOnlyWhenAllSessionClearsFail(t *testing.T) {
 	handler := NewLogoutHandler(
 		store,
 		logging.ContextUnavailable(),
-		&config.BaseAuth{LogoutRedirectURL: "/auth/login"},
-		nil,
+		"/auth/login",
 	)
 
 	recorder := httptest.NewRecorder()
@@ -104,30 +98,6 @@ func TestLogoutHandlerFailsOnlyWhenAllSessionClearsFail(t *testing.T) {
 	})
 }
 
-func TestResolveLogoutRedirectURLUsesResolver(t *testing.T) {
-	authConfig := &config.BaseAuth{LogoutRedirectURL: "/auth/login"}
-
-	got, err := resolveLogoutRedirectURL(context.Background(), authConfig, staticLogoutRedirectResolver{url: "https://idp.example.com/logout"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "https://idp.example.com/logout" {
-		t.Fatalf("unexpected logout redirect URL: got %q", got)
-	}
-}
-
-func TestResolveLogoutRedirectURLReturnsFallbackWithoutResolver(t *testing.T) {
-	authConfig := &config.BaseAuth{LogoutRedirectURL: "/auth/login"}
-
-	got, err := resolveLogoutRedirectURL(context.Background(), authConfig, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "/auth/login" {
-		t.Fatalf("unexpected logout redirect URL: got %q, want /auth/login", got)
-	}
-}
-
 func assertEqualStrings(t *testing.T, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -138,14 +108,6 @@ func assertEqualStrings(t *testing.T, got, want []string) {
 			t.Fatalf("unexpected strings: got %v, want %v", got, want)
 		}
 	}
-}
-
-type staticLogoutRedirectResolver struct {
-	url string
-}
-
-func (r staticLogoutRedirectResolver) LogoutRedirectURL(_ context.Context, _ string) (string, error) {
-	return r.url, nil
 }
 
 type recordingSessionStore struct {

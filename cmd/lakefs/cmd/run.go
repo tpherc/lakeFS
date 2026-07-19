@@ -107,7 +107,7 @@ var runCmd = &cobra.Command{
 
 		authService := authfactory.NewAuthService(ctx, cfg, logger, kvStore, authMetadataManager)
 
-		authenticationService, err := authentication.NewAuthenticationService(ctx, cfg, logger)
+		authenticationService, err := authentication.NewAuthenticationService(ctx, cfg, authService, logger)
 		if err != nil {
 			logger.WithError(err).Fatal("failed to create authentication service")
 		}

@@ -265,6 +265,8 @@ func TestProvisionExternalUserRollbackFailureReturnsBothErrors(t *testing.T) {
 	}, []string{"Developers"}, ExternalIdentityProvisioningOptions{})
 	require.ErrorIs(t, err, addErr)
 	require.ErrorIs(t, err, deleteErr)
+	require.ErrorIs(t, err, ErrExternalUserProvisioningIncomplete)
+	require.Contains(t, err.Error(), "initial group assignment and rollback failed")
 	require.Nil(t, user)
 	require.Equal(t, []string{"frank"}, authService.deletedUsers)
 	_, getErr := authService.GetUserByExternalID(t.Context(), "frank")

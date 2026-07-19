@@ -757,11 +757,7 @@ type OIDCProvider struct {
 }
 
 func (p *OIDCProvider) IsConfigured() bool {
-	return p != nil && (p.URL != "" ||
-		p.ClientID != "" ||
-		p.ClientSecret.SecureValue() != "" ||
-		p.CallbackBaseURL != "" ||
-		len(p.CallbackBaseURLs) > 0)
+	return p != nil
 }
 
 type OIDC struct {

@@ -86,26 +86,19 @@ func ProvisionExternalUser(ctx context.Context, logger logging.Logger, authServi
 
 	if err := addInitialGroups(ctx, logger, authService, newUser.Username, initialGroups); err != nil {
 		if deleteErr := authService.DeleteUser(ctx, newUser.Username); deleteErr != nil {
+			log.WithError(errors.Join(err, deleteErr)).WithFields(logging.Fields{
+				"username":       newUser.Username,
+				"initial_groups": initialGroups,
+			}).Error("External user provisioning rollback failed; delete the user or complete initial group membership before retrying login")
 			return nil, errors.Join(
 				err,
-				fmt.Errorf("rollback created user %q: %w", newUser.Username, deleteErr),
+				fmt.Errorf("%w: user %q was created but initial group assignment and rollback failed: %w", ErrExternalUserProvisioningIncomplete, newUser.Username, deleteErr),
 			)
 		}
 		return nil, err
 	}
 
 	return enhanceExternalUserFriendlyName(ctx, &newUser, identity.FriendlyName, false, authService, logger), nil
-}
-
-// ResolveOrProvisionExternalUser resolves an existing lakeFS user by external
-// ID or provisions a new one. Initial groups are assigned only during first
-// provisioning.
-func ResolveOrProvisionExternalUser(ctx context.Context, logger logging.Logger, authService Service, identity ExternalIdentity, initialGroups []string, options ExternalIdentityProvisioningOptions) (*model.User, error) {
-	user, found, err := ResolveExternalUser(ctx, logger, authService, identity, options)
-	if err != nil || found {
-		return user, err
-	}
-	return ProvisionExternalUser(ctx, logger, authService, identity, initialGroups, options)
 }
 
 func externalIdentityLog(logger logging.Logger, identity ExternalIdentity) logging.Logger {

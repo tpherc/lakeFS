@@ -196,22 +196,17 @@ func (s *oidcSessionAuthService) UpdateUserFriendlyName(_ context.Context, usern
 	return nil
 }
 
-func TestUserFromOIDCSessionCreatesUserAndAssignsInitialGroups(t *testing.T) {
+func TestResolveOrProvisionOIDCUserFromClaimsCreatesUserAndAssignsInitialGroups(t *testing.T) {
 	authService := newOIDCSessionAuthService()
 	externalID := oidcExternalID("https://issuer.example", "alice/opaque")
-	session := &sessions.Session{Values: map[interface{}]interface{}{
-		IDTokenClaimsSessionKey: `{
-			"iss": "https://issuer.example",
-			"sub": "alice/opaque",
-			"name": "Alice Example",
-			"email": "alice@example.com",
-			"department": "Data",
-			"roles": "Developers, Viewers, Developers"
-		}`,
-	}}
-	MarkOIDCSessionClaimsCurrent(session, time.Now().Add(time.Hour))
-
-	user, err := UserFromOIDCSession(t.Context(), logging.ContextUnavailable(), authService, session, &OIDCConfig{
+	user, err := ResolveOrProvisionOIDCUserFromClaims(t.Context(), logging.ContextUnavailable(), authService, oidcencoding.Claims{
+		"iss":        "https://issuer.example",
+		"sub":        "alice/opaque",
+		"name":       "Alice Example",
+		"email":      "alice@example.com",
+		"department": "Data",
+		"roles":      "Developers, Viewers, Developers",
+	}, &OIDCConfig{
 		ValidateIDTokenClaims:  map[string]string{"department": "Data"},
 		DefaultInitialGroups:   []string{"Admins"},
 		InitialGroupsClaimName: "roles",
@@ -273,7 +268,7 @@ func TestUserFromOIDCSessionExistingUserUpdatesFriendlyNameWithoutInitialGroupCh
 	require.Equal(t, []friendlyNameUpdate{{username: "bob", friendlyName: "Bob New"}}, authService.friendlyNameUpdates)
 }
 
-func TestUserFromOIDCSessionDoesNotUseRawSubjectExternalID(t *testing.T) {
+func TestUserFromOIDCSessionDoesNotProvisionOrUseRawSubjectExternalID(t *testing.T) {
 	authService := newOIDCSessionAuthService(&model.User{
 		Username:     "raw-subject-bob",
 		ExternalID:   stringPtr("legacy/bob"),
@@ -296,13 +291,11 @@ func TestUserFromOIDCSessionDoesNotUseRawSubjectExternalID(t *testing.T) {
 		FriendlyNameClaimName:  "name",
 		PersistFriendlyName:    true,
 	})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrAuthenticatingRequest)
+	require.Nil(t, user)
 
-	externalID := oidcExternalID("https://issuer.example", "legacy/bob")
-	require.Equal(t, externalID, user.Username)
-	require.Equal(t, "Bob New", stringValue(user.FriendlyName))
-	require.Len(t, authService.createdUsers, 1)
-	require.Equal(t, []oidcGroupMembership{{username: externalID, groupID: "Admins"}}, authService.addedGroups)
+	require.Empty(t, authService.createdUsers)
+	require.Empty(t, authService.addedGroups)
 	require.Empty(t, authService.friendlyNameUpdates)
 }
 
@@ -322,14 +315,13 @@ func TestUserFromOIDCSessionRequiredClaimMismatchDoesNotMutateUsers(t *testing.T
 	require.Empty(t, authService.addedGroups)
 }
 
-func TestUserFromOIDCSessionValidatesInitialGroupsBeforeCreate(t *testing.T) {
+func TestResolveOrProvisionOIDCUserFromClaimsValidatesInitialGroupsBeforeCreate(t *testing.T) {
 	authService := newOIDCSessionAuthService()
-	session := &sessions.Session{Values: map[interface{}]interface{}{
-		IDTokenClaimsSessionKey: `{"iss":"https://issuer.example","sub":"dave","roles":["Developers",7]}`,
-	}}
-	MarkOIDCSessionClaimsCurrent(session, time.Now().Add(time.Hour))
-
-	user, err := UserFromOIDCSession(t.Context(), logging.ContextUnavailable(), authService, session, &OIDCConfig{
+	user, err := ResolveOrProvisionOIDCUserFromClaims(t.Context(), logging.ContextUnavailable(), authService, oidcencoding.Claims{
+		"iss":   "https://issuer.example",
+		"sub":   "dave",
+		"roles": []any{"Developers", 7},
+	}, &OIDCConfig{
 		InitialGroupsClaimName: "roles",
 	})
 	require.ErrorIs(t, err, ErrAuthenticatingRequest)
@@ -338,16 +330,15 @@ func TestUserFromOIDCSessionValidatesInitialGroupsBeforeCreate(t *testing.T) {
 	require.Empty(t, authService.addedGroups)
 }
 
-func TestUserFromOIDCSessionRollsBackUserAfterInitialGroupFailure(t *testing.T) {
+func TestResolveOrProvisionOIDCUserFromClaimsRollsBackUserAfterInitialGroupFailure(t *testing.T) {
 	authService := newOIDCSessionAuthService()
 	authService.addUserToGroupErr = ErrInternalServerError
 	externalID := oidcExternalID("https://issuer.example", "erin")
-	session := &sessions.Session{Values: map[interface{}]interface{}{
-		IDTokenClaimsSessionKey: `{"iss":"https://issuer.example","sub":"erin","roles":["Developers"]}`,
-	}}
-	MarkOIDCSessionClaimsCurrent(session, time.Now().Add(time.Hour))
-
-	user, err := UserFromOIDCSession(t.Context(), logging.ContextUnavailable(), authService, session, &OIDCConfig{
+	user, err := ResolveOrProvisionOIDCUserFromClaims(t.Context(), logging.ContextUnavailable(), authService, oidcencoding.Claims{
+		"iss":   "https://issuer.example",
+		"sub":   "erin",
+		"roles": []any{"Developers"},
+	}, &OIDCConfig{
 		InitialGroupsClaimName: "roles",
 	})
 	require.ErrorIs(t, err, ErrInternalServerError)

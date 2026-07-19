@@ -167,7 +167,7 @@ func setupHandler(t testing.TB) (http.Handler, *dependencies) {
 
 	auditChecker := version.NewDefaultAuditChecker(baseCfg.Security.AuditCheckURL, "", nil)
 
-	authenticationService := authentication.NewDummyService()
+	authenticationService := authentication.NewDummyService("/auth/login")
 	logger := logging.FromContext(ctx)
 	handler := api.Serve(
 		cfg,

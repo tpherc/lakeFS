@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/stretchr/testify/require"
 	"github.com/treeverse/lakefs/pkg/auth"
+	"github.com/treeverse/lakefs/pkg/auth/model"
 	"github.com/treeverse/lakefs/pkg/auth/oidc/encoding"
 	"github.com/treeverse/lakefs/pkg/config"
 	"github.com/treeverse/lakefs/pkg/logging"
@@ -114,12 +115,13 @@ func TestOIDCCallbackConsumesTransactionBeforeExchangeAndStoresNormalizedClaims(
 			}, nil
 		},
 	}
-	service := testOIDCService(fakeClient, config.OIDC{
+	authService := newOIDCCallbackAuthService()
+	service := testOIDCServiceWithAuth(fakeClient, config.OIDC{
 		FriendlyNameClaimName:  "name",
 		EmailClaimName:         "email",
 		InitialGroupsClaimName: "groups",
 		ValidateIDTokenClaims:  map[string]string{"department": "Data"},
-	})
+	}, authService)
 
 	callbackURL := "https://lakefs.example/api/v1/oidc/callback?state=state-1&code=code-1"
 	callbackReq := httptest.NewRequest(http.MethodGet, callbackURL, nil)
@@ -149,11 +151,15 @@ func TestOIDCCallbackConsumesTransactionBeforeExchangeAndStoresNormalizedClaims(
 	require.Equal(t, encoding.Claims{
 		"iss":        "https://idp.example",
 		"sub":        "alice",
-		"email":      "alice@example.com",
 		"name":       "Alice",
-		"groups":     []any{"Developers", "Readers"},
 		"department": "Data",
 	}, claims)
+	require.Len(t, authService.createdUsers, 1)
+	require.Equal(t, "alice@example.com", stringValue(authService.createdUsers[0].Email))
+	require.Equal(t, []oidcCallbackGroupMembership{
+		{username: authService.createdUsers[0].Username, groupID: "Developers"},
+		{username: authService.createdUsers[0].Username, groupID: "Readers"},
+	}, authService.addedGroups)
 
 	replayReq := httptest.NewRequest(http.MethodGet, callbackURL, nil)
 	for _, cookie := range latestCookies(callbackRec.Result()) {
@@ -164,6 +170,104 @@ func TestOIDCCallbackConsumesTransactionBeforeExchangeAndStoresNormalizedClaims(
 	require.Equal(t, http.StatusFound, replayRec.Code)
 	require.Equal(t, "/auth/login", replayRec.Header().Get("Location"))
 	require.Equal(t, 1, fakeClient.exchangeCalls)
+}
+
+func TestOIDCCallbackRequiredClaimMismatchDoesNotSaveSessionOrProvisionUser(t *testing.T) {
+	store := testSessionStore(t)
+	transaction := sampleOIDCTransaction("https://lakefs.example/api/v1/oidc/callback", "/repositories")
+	loginReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/oidc/login", nil)
+	loginRec := httptest.NewRecorder()
+	require.NoError(t, (oidcSessionStore{store: store}).SaveTransaction(loginRec, loginReq, transaction))
+
+	authService := newOIDCCallbackAuthService()
+	fakeClient := &fakeOIDCClient{
+		exchangeFunc: func(_ context.Context, _ *oidcTransaction, _ oidcCallbackInput) (encoding.Claims, error) {
+			return encoding.Claims{
+				"iss":        "https://idp.example",
+				"sub":        "alice",
+				"department": "Finance",
+			}, nil
+		},
+	}
+	service := testOIDCServiceWithAuth(fakeClient, config.OIDC{
+		ValidateIDTokenClaims: map[string]string{"department": "Data"},
+	}, authService)
+
+	callbackReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/api/v1/oidc/callback?state=state-1&code=code-1", nil)
+	for _, cookie := range latestCookies(loginRec.Result()) {
+		callbackReq.AddCookie(cookie)
+	}
+	callbackRec := httptest.NewRecorder()
+
+	service.OauthCallback(callbackRec, callbackReq, store)
+	require.Equal(t, http.StatusFound, callbackRec.Code)
+	require.Equal(t, "/auth/login", callbackRec.Header().Get("Location"))
+	require.Empty(t, authService.createdUsers)
+
+	afterReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/repositories", nil)
+	for _, cookie := range latestCookies(callbackRec.Result()) {
+		afterReq.AddCookie(cookie)
+	}
+	oidcSession, err := (oidcSessionStore{store: store}).Load(httptest.NewRecorder(), afterReq)
+	require.NoError(t, err)
+	_, hasClaims := oidcSession.session.Values[auth.IDTokenClaimsSessionKey]
+	require.False(t, hasClaims)
+}
+
+func TestOIDCCallbackExistingUserIgnoresLargeCreationOnlyGroupClaim(t *testing.T) {
+	store := testSessionStore(t)
+	transaction := sampleOIDCTransaction("https://lakefs.example/api/v1/oidc/callback", "/repositories")
+	loginReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/oidc/login", nil)
+	loginRec := httptest.NewRecorder()
+	require.NoError(t, (oidcSessionStore{store: store}).SaveTransaction(loginRec, loginReq, transaction))
+
+	externalID := oidcExternalIDForTest("https://idp.example", "alice")
+	authService := newOIDCCallbackAuthService(&model.User{
+		Username:   "alice",
+		ExternalID: stringPtr(externalID),
+		Source:     "oidc",
+	})
+	fakeClient := &fakeOIDCClient{
+		exchangeFunc: func(_ context.Context, _ *oidcTransaction, _ oidcCallbackInput) (encoding.Claims, error) {
+			return encoding.Claims{
+				"iss":    "https://idp.example",
+				"sub":    "alice",
+				"name":   "Alice",
+				"groups": strings.Repeat("x", oidcClaimsMaxJSONSize*2),
+			}, nil
+		},
+	}
+	service := testOIDCServiceWithAuth(fakeClient, config.OIDC{
+		FriendlyNameClaimName:  "name",
+		InitialGroupsClaimName: "groups",
+		PersistFriendlyName:    true,
+	}, authService)
+
+	callbackReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/api/v1/oidc/callback?state=state-1&code=code-1", nil)
+	for _, cookie := range latestCookies(loginRec.Result()) {
+		callbackReq.AddCookie(cookie)
+	}
+	callbackRec := httptest.NewRecorder()
+
+	service.OauthCallback(callbackRec, callbackReq, store)
+	require.Equal(t, http.StatusFound, callbackRec.Code)
+	require.Equal(t, "/repositories", callbackRec.Header().Get("Location"))
+	require.Empty(t, authService.createdUsers)
+	require.Empty(t, authService.addedGroups)
+	require.Equal(t, []oidcCallbackFriendlyNameUpdate{{username: "alice", friendlyName: "Alice"}}, authService.friendlyNameUpdates)
+
+	authedReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/repositories", nil)
+	for _, cookie := range latestCookies(callbackRec.Result()) {
+		authedReq.AddCookie(cookie)
+	}
+	oidcSession, err := (oidcSessionStore{store: store}).Load(httptest.NewRecorder(), authedReq)
+	require.NoError(t, err)
+	claimsJSON, ok := oidcSession.session.Values[auth.IDTokenClaimsSessionKey].(string)
+	require.True(t, ok)
+	var claims encoding.Claims
+	require.NoError(t, json.Unmarshal([]byte(claimsJSON), &claims))
+	require.NotContains(t, claims, "groups")
+	require.Equal(t, "Alice", claims["name"])
 }
 
 func TestOIDCCallbackWrongStateClearsTransaction(t *testing.T) {
@@ -205,12 +309,16 @@ func TestNormalizeOIDCClaimsRequiresIssuer(t *testing.T) {
 }
 
 func TestNewOIDCServiceRejectsInvalidLogoutURLBeforeProviderInitialization(t *testing.T) {
-	service, err := NewOIDCService(t.Context(), config.OIDCProvider{}, config.OIDC{}, time.Hour, "logout", logging.ContextUnavailable())
+	service, err := NewOIDCService(t.Context(), nil, config.OIDCProvider{}, config.OIDC{}, time.Hour, "logout", logging.ContextUnavailable())
 	require.Error(t, err)
 	require.Nil(t, service)
 }
 
 func testOIDCService(client oidcProtocolClient, claimsConfig config.OIDC) *OIDCService {
+	return testOIDCServiceWithAuth(client, claimsConfig, newOIDCCallbackAuthService())
+}
+
+func testOIDCServiceWithAuth(client oidcProtocolClient, claimsConfig config.OIDC, authService auth.Service) *OIDCService {
 	callbacks, err := newOIDCCallbackResolver(config.OIDCProvider{CallbackBaseURL: "https://lakefs.example"})
 	if err != nil {
 		panic(err)
@@ -218,6 +326,7 @@ func testOIDCService(client oidcProtocolClient, claimsConfig config.OIDC) *OIDCS
 	return &OIDCService{
 		oidc:                 client,
 		callbacks:            callbacks,
+		authService:          authService,
 		userClaimsConfig:     claimsConfig,
 		sessionDuration:      time.Hour,
 		logger:               logging.ContextUnavailable(),
@@ -261,6 +370,104 @@ func sampleOIDCTransaction(redirectURI, next string) *oidcTransaction {
 		CodeVerifier: "verifier-1",
 		StartedAt:    time.Now().Add(-time.Minute).Unix(),
 	}
+}
+
+type oidcCallbackAuthService struct {
+	auth.Service
+	usersByExternalID   map[string]*model.User
+	createdUsers        []*model.User
+	addedGroups         []oidcCallbackGroupMembership
+	friendlyNameUpdates []oidcCallbackFriendlyNameUpdate
+	deletedUsers        []string
+	addUserToGroupErr   error
+	deleteUserErr       error
+}
+
+type oidcCallbackGroupMembership struct {
+	username string
+	groupID  string
+}
+
+type oidcCallbackFriendlyNameUpdate struct {
+	username     string
+	friendlyName string
+}
+
+func newOIDCCallbackAuthService(users ...*model.User) *oidcCallbackAuthService {
+	s := &oidcCallbackAuthService{usersByExternalID: make(map[string]*model.User)}
+	for _, user := range users {
+		if user.ExternalID != nil {
+			s.usersByExternalID[*user.ExternalID] = cloneUser(user)
+		}
+	}
+	return s
+}
+
+func (s *oidcCallbackAuthService) GetUserByExternalID(_ context.Context, externalID string) (*model.User, error) {
+	user := s.usersByExternalID[externalID]
+	if user == nil {
+		return nil, auth.ErrNotFound
+	}
+	return cloneUser(user), nil
+}
+
+func (s *oidcCallbackAuthService) CreateUser(_ context.Context, user *model.User) (string, error) {
+	copied := cloneUser(user)
+	s.createdUsers = append(s.createdUsers, copied)
+	if copied.ExternalID != nil {
+		s.usersByExternalID[*copied.ExternalID] = cloneUser(copied)
+	}
+	return user.Username, nil
+}
+
+func (s *oidcCallbackAuthService) AddUserToGroup(_ context.Context, username, groupID string) error {
+	s.addedGroups = append(s.addedGroups, oidcCallbackGroupMembership{username: username, groupID: groupID})
+	return s.addUserToGroupErr
+}
+
+func (s *oidcCallbackAuthService) DeleteUser(_ context.Context, username string) error {
+	s.deletedUsers = append(s.deletedUsers, username)
+	if s.deleteUserErr != nil {
+		return s.deleteUserErr
+	}
+	for externalID, user := range s.usersByExternalID {
+		if user.Username == username {
+			delete(s.usersByExternalID, externalID)
+		}
+	}
+	return nil
+}
+
+func (s *oidcCallbackAuthService) UpdateUserFriendlyName(_ context.Context, username, friendlyName string) error {
+	s.friendlyNameUpdates = append(s.friendlyNameUpdates, oidcCallbackFriendlyNameUpdate{
+		username:     username,
+		friendlyName: friendlyName,
+	})
+	for _, user := range s.usersByExternalID {
+		if user.Username == username {
+			user.FriendlyName = &friendlyName
+		}
+	}
+	return nil
+}
+
+func cloneUser(user *model.User) *model.User {
+	if user == nil {
+		return nil
+	}
+	copied := *user
+	return &copied
+}
+
+func stringPtr(value string) *string {
+	return &value
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 type fakeOIDCClient struct {

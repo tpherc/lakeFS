@@ -16,9 +16,6 @@ func (p *OIDCProvider) Validate() error {
 	if err := p.validateLogoutEndpointQueryParameters(); err != nil {
 		return err
 	}
-	if !p.IsConfigured() {
-		return nil
-	}
 	switch {
 	case strings.TrimSpace(p.URL) == "":
 		return fmt.Errorf("%w: auth.providers.oidc.url is required", ErrBadConfiguration)

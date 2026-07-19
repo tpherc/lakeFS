@@ -286,7 +286,47 @@ func TestOIDCProviderValidateAuthorizeAndLogoutParameters(t *testing.T) {
 	require.Equal(t, map[string]string{"login_hint": "alice@example.com"}, params)
 }
 
-func TestOIDCProviderValidateLogoutParametersWithoutConfiguredProvider(t *testing.T) {
+func TestOIDCProviderValidatePartialProviderBlocks(t *testing.T) {
+	var absent *config.OIDCProvider
+	require.False(t, absent.IsConfigured())
+	require.NoError(t, absent.Validate())
+
+	tests := []struct {
+		name    string
+		cfg     config.OIDCProvider
+		wantErr string
+	}{
+		{
+			name:    "empty block",
+			cfg:     config.OIDCProvider{},
+			wantErr: "auth.providers.oidc.url is required",
+		},
+		{
+			name: "optional scope only",
+			cfg: config.OIDCProvider{
+				AdditionalScopeClaims: []string{"email"},
+			},
+			wantErr: "auth.providers.oidc.url is required",
+		},
+		{
+			name: "logout-only valid key value list",
+			cfg: config.OIDCProvider{
+				LogoutEndpointQueryParameters: []string{"returnTo", "https://lakefs.example/auth/login"},
+			},
+			wantErr: "auth.providers.oidc.url is required",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.True(t, tt.cfg.IsConfigured())
+			err := tt.cfg.Validate()
+			require.ErrorIs(t, err, config.ErrBadConfiguration)
+			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestOIDCProviderValidateMalformedLogoutParameters(t *testing.T) {
 	tests := []struct {
 		name string
 		cfg  config.OIDCProvider
@@ -312,13 +352,13 @@ func TestOIDCProviderValidateLogoutParametersWithoutConfiguredProvider(t *testin
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			require.True(t, tt.cfg.IsConfigured())
 			require.ErrorIs(t, tt.cfg.Validate(), config.ErrBadConfiguration)
 		})
 	}
 
-	cfg := config.OIDCProvider{
-		LogoutEndpointQueryParameters: []string{"returnTo", "https://lakefs.example/auth/login"},
-	}
+	cfg := validOIDCProviderConfig()
+	cfg.LogoutEndpointQueryParameters = []string{"returnTo", "https://lakefs.example/auth/login"}
 	require.NoError(t, cfg.Validate())
 }
 

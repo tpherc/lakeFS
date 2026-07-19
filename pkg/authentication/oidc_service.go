@@ -26,6 +26,7 @@ const (
 type OIDCService struct {
 	oidc                 oidcProtocolClient
 	callbacks            oidcCallbackResolver
+	authService          auth.Service
 	userClaimsConfig     config.OIDC
 	sessionDuration      time.Duration
 	postLoginRedirectURL string
@@ -33,7 +34,7 @@ type OIDCService struct {
 	logger               logging.Logger
 }
 
-func NewOIDCService(ctx context.Context, providerConfig config.OIDCProvider, userClaimsConfig config.OIDC, sessionDuration time.Duration, logoutRedirectURL string, logger logging.Logger) (*OIDCService, error) {
+func NewOIDCService(ctx context.Context, authService auth.Service, providerConfig config.OIDCProvider, userClaimsConfig config.OIDC, sessionDuration time.Duration, logoutRedirectURL string, logger logging.Logger) (*OIDCService, error) {
 	compiledLogoutURL, err := compileOIDCLogoutURL(logoutRedirectURL, providerConfig)
 	if err != nil {
 		return nil, err
@@ -50,6 +51,7 @@ func NewOIDCService(ctx context.Context, providerConfig config.OIDCProvider, use
 	return &OIDCService{
 		oidc:                 oidcClient,
 		callbacks:            callbacks,
+		authService:          authService,
 		userClaimsConfig:     userClaimsConfig,
 		sessionDuration:      sessionDuration,
 		postLoginRedirectURL: providerConfig.PostLoginRedirectURL,
@@ -75,8 +77,8 @@ func (s *OIDCService) ValidateSTS(_ context.Context, _, _, _ string) (string, er
 	return "", ErrNotImplemented
 }
 
-func (s *OIDCService) LogoutRedirectURL(_ context.Context, _ string) (string, error) {
-	return s.logoutRedirectURL, nil
+func (s *OIDCService) LogoutRedirectURL() string {
+	return s.logoutRedirectURL
 }
 
 func (s *OIDCService) RegisterAdditionalRoutes(r *chi.Mux, sessionStore sessions.Store) {
@@ -132,6 +134,17 @@ func (s *OIDCService) OauthCallback(w http.ResponseWriter, r *http.Request, sess
 	claims, err := s.oidc.Exchange(r.Context(), transaction, oidcCallbackInput{State: state, Code: code})
 	if err != nil {
 		s.logger.WithError(err).Error("failed to exchange OIDC authorization code")
+		redirectToLogin(w, r)
+		return
+	}
+	authOIDCConfig := oidcAuthConfig(s.userClaimsConfig)
+	if err := auth.ValidateOIDCRequiredClaims(claims, authOIDCConfig.ValidateIDTokenClaims); err != nil {
+		s.logger.WithError(err).Warn("OIDC required claim validation failed")
+		redirectToLogin(w, r)
+		return
+	}
+	if _, err := auth.ResolveOrProvisionOIDCUserFromClaims(r.Context(), s.logger, s.authService, claims, &authOIDCConfig); err != nil {
+		s.logger.WithError(err).Error("failed to resolve or provision OIDC user")
 		redirectToLogin(w, r)
 		return
 	}
@@ -233,8 +246,6 @@ func normalizeOIDCClaims(claims encoding.Claims, cfg config.OIDC) (encoding.Clai
 		"sub": sub,
 	}
 	copyConfiguredClaim(normalized, claims, cfg.FriendlyNameClaimName)
-	copyConfiguredClaim(normalized, claims, cfg.EmailClaimName)
-	copyConfiguredClaim(normalized, claims, cfg.InitialGroupsClaimName)
 	for claimName := range cfg.ValidateIDTokenClaims {
 		copyConfiguredClaim(normalized, claims, claimName)
 	}
@@ -247,5 +258,16 @@ func copyConfiguredClaim(dst, src encoding.Claims, claimName string) {
 	}
 	if value, ok := src[claimName]; ok {
 		dst[claimName] = value
+	}
+}
+
+func oidcAuthConfig(cfg config.OIDC) auth.OIDCConfig {
+	return auth.OIDCConfig{
+		ValidateIDTokenClaims:  cfg.ValidateIDTokenClaims,
+		DefaultInitialGroups:   cfg.DefaultInitialGroups,
+		InitialGroupsClaimName: cfg.InitialGroupsClaimName,
+		FriendlyNameClaimName:  cfg.FriendlyNameClaimName,
+		EmailClaimName:         cfg.EmailClaimName,
+		PersistFriendlyName:    cfg.PersistFriendlyName,
 	}
 }
