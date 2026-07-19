@@ -5,8 +5,12 @@ import (
 	"fmt"
 )
 
+type storageMetadataProvider interface {
+	BlockstoreMetadataForStorage(ctx context.Context, storageID string) (*BlockstoreMetadata, error)
+}
+
 func ValidateInterRegionStorage(ctx context.Context, adapter Adapter, storageID, storageNamespace string) error {
-	blockstoreMetadata, err := adapter.BlockstoreMetadata(ctx)
+	blockstoreMetadata, err := blockstoreMetadata(ctx, adapter, storageID)
 	if err != nil {
 		return err
 	}
@@ -26,4 +30,13 @@ func ValidateInterRegionStorage(ctx context.Context, adapter Adapter, storageID,
 	}
 
 	return nil
+}
+
+func blockstoreMetadata(ctx context.Context, adapter Adapter, storageID string) (*BlockstoreMetadata, error) {
+	if storageID != "" {
+		if provider, ok := adapter.(storageMetadataProvider); ok {
+			return provider.BlockstoreMetadataForStorage(ctx, storageID)
+		}
+	}
+	return adapter.BlockstoreMetadata(ctx)
 }

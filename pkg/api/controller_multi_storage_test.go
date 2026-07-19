@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -160,4 +161,97 @@ func TestControllerConfigMultiStorageRedactsSigningKey(t *testing.T) {
 	encoded, err := json.Marshal(resp.JSON200)
 	require.NoError(t, err)
 	require.NotContains(t, string(encoded), signingSecret)
+}
+
+func TestControllerConfigCanonicalOneStoreUsesListAndStorageConfigCompatibility(t *testing.T) {
+	viper.Set("blockstores.signing.secret_key", "signing")
+	viper.Set("blockstores.stores", []map[string]any{
+		{
+			"id":   "alpha",
+			"type": block.BlockstoreTypeMem,
+		},
+	})
+	t.Cleanup(func() {
+		viper.Set("blockstores.stores", nil)
+		viper.Set("blockstores.signing.secret_key", nil)
+	})
+
+	handler, _ := setupHandler(t)
+	server := setupServer(t, handler)
+	clt := setupClientByEndpoint(t, server.URL, "", "")
+	cred := createDefaultAdminUser(t, clt)
+	clt = setupClientByEndpoint(t, server.URL, cred.AccessKeyID, cred.SecretAccessKey)
+
+	configResp, err := clt.GetConfigWithResponse(t.Context())
+	verifyResponseOK(t, configResp, err)
+	require.NotNil(t, configResp.JSON200)
+	require.Nil(t, configResp.JSON200.StorageConfig)
+	require.NotNil(t, configResp.JSON200.StorageConfigList)
+	require.Len(t, *configResp.JSON200.StorageConfigList, 1)
+	require.Equal(t, "alpha", swag.StringValue((*configResp.JSON200.StorageConfigList)[0].BlockstoreId))
+
+	storageResp, err := clt.GetStorageConfigWithResponse(t.Context())
+	verifyResponseOK(t, storageResp, err)
+	require.NotNil(t, storageResp.JSON200)
+	require.Equal(t, "alpha", swag.StringValue(storageResp.JSON200.BlockstoreId))
+}
+
+func TestControllerStorageConfigCompatibilityUsesBackwardCompatibleStore(t *testing.T) {
+	viper.Set("blockstores.signing.secret_key", "signing")
+	viper.Set("blockstores.stores", []map[string]any{
+		{
+			"id":                  "alpha",
+			"type":                block.BlockstoreTypeMem,
+			"backward_compatible": true,
+		},
+		{
+			"id":   "beta",
+			"type": block.BlockstoreTypeMem,
+		},
+	})
+	t.Cleanup(func() {
+		viper.Set("blockstores.stores", nil)
+		viper.Set("blockstores.signing.secret_key", nil)
+	})
+
+	handler, _ := setupHandler(t)
+	server := setupServer(t, handler)
+	clt := setupClientByEndpoint(t, server.URL, "", "")
+	cred := createDefaultAdminUser(t, clt)
+	clt = setupClientByEndpoint(t, server.URL, cred.AccessKeyID, cred.SecretAccessKey)
+
+	resp, err := clt.GetStorageConfigWithResponse(t.Context())
+	verifyResponseOK(t, resp, err)
+	require.NotNil(t, resp.JSON200)
+	require.Equal(t, "alpha", swag.StringValue(resp.JSON200.BlockstoreId))
+}
+
+func TestControllerStorageConfigCompatibilityRejectsAmbiguousMultiStorage(t *testing.T) {
+	viper.Set("blockstores.signing.secret_key", "signing")
+	viper.Set("blockstores.stores", []map[string]any{
+		{
+			"id":   "alpha",
+			"type": block.BlockstoreTypeMem,
+		},
+		{
+			"id":   "beta",
+			"type": block.BlockstoreTypeMem,
+		},
+	})
+	t.Cleanup(func() {
+		viper.Set("blockstores.stores", nil)
+		viper.Set("blockstores.signing.secret_key", nil)
+	})
+
+	handler, _ := setupHandler(t)
+	server := setupServer(t, handler)
+	clt := setupClientByEndpoint(t, server.URL, "", "")
+	cred := createDefaultAdminUser(t, clt)
+	clt = setupClientByEndpoint(t, server.URL, cred.AccessKeyID, cred.SecretAccessKey)
+
+	resp, err := clt.GetStorageConfigWithResponse(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode())
+	require.Nil(t, resp.JSON200)
+	require.Contains(t, string(resp.Body), config.ErrNoStorageConfig.Error())
 }

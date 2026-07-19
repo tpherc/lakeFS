@@ -301,7 +301,7 @@ const RepositoriesPage = () => {
     );
 
     const { config, error: err, loading } = useConfigContext();
-    const storageConfigs = config?.storages;
+    const storageConfigs = config?.storages ?? [];
 
     const createRepo = async (repo, presentRepo = true) => {
         try {
@@ -345,6 +345,7 @@ const RepositoriesPage = () => {
         if (!err && storageConfigs.length && storageConfigs[0]?.blockstore_type === LOCAL_BLOCKSTORE_TYPE) {
             const sampleRepo = {
                 name: LOCAL_BLOCKSTORE_SAMPLE_REPO_NAME,
+                storage_id: storageConfigs[0]?.blockstore_id ?? '',
                 storage_namespace: `local://${LOCAL_BLOCKSTORE_SAMPLE_REPO_NAME}`,
                 default_branch: LOCAL_BLOCKSTORE_SAMPLE_REPO_DEFAULT_BRANCH,
                 sample_data: true,

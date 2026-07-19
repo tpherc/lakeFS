@@ -2117,7 +2117,11 @@ func (c *Controller) GetStorageConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	storageCfg, _ := c.getStorageConfigs()
+	storageCfg, err := c.getCompatibilityStorageConfig()
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, err)
+		return
+	}
 	writeResponse(w, r, http.StatusOK, storageCfg)
 }
 
@@ -2128,6 +2132,35 @@ func (c *Controller) getStorageConfigs() (*apigen.StorageConfig, apigen.StorageC
 		storageCfgList = apigen.StorageConfigList{}
 	}
 	return storageCfg, storageCfgList
+}
+
+func (c *Controller) getCompatibilityStorageConfig() (*apigen.StorageConfig, error) {
+	storageCfg, storageCfgList := c.getStorageConfigs()
+	if len(storageCfgList) == 0 {
+		if storageCfg == nil {
+			return nil, config.ErrNoStorageConfig
+		}
+		return storageCfg, nil
+	}
+	if len(storageCfgList) == 1 {
+		return &storageCfgList[0], nil
+	}
+
+	var compatible *apigen.StorageConfig
+	for i := range storageCfgList {
+		storageID := swag.StringValue(storageCfgList[i].BlockstoreId)
+		storage := c.Config.StorageConfig().GetStorageByID(storageID)
+		if storage != nil && storage.IsBackwardsCompatible() {
+			if compatible != nil {
+				return nil, config.ErrNoStorageConfig
+			}
+			compatible = &storageCfgList[i]
+		}
+	}
+	if compatible == nil {
+		return nil, config.ErrNoStorageConfig
+	}
+	return compatible, nil
 }
 
 func (c *Controller) getStorageConfig(storageID string) (*apigen.StorageConfig, error) {
