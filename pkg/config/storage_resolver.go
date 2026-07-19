@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -175,6 +176,11 @@ func canonicalStoreRawEntries() []map[string]any {
 			out = append(out, rawMap(store))
 		}
 		return out
+	case string:
+		var out []map[string]any
+		if err := json.Unmarshal([]byte(stores), &out); err == nil {
+			return out
+		}
 	}
 	return nil
 }

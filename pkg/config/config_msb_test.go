@@ -415,6 +415,45 @@ blockstores:
 	require.Equal(t, config.DefaultBlockstoreS3Region, storage.S3.Region)
 }
 
+func TestBlockstoresPreservesExplicitZeroAndFalseBackendValuesFromEnvironment(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("LAKEFS_BLOCKSTORES_STORES", `[{
+  "id": "alpha",
+  "type": "s3",
+  "s3": {
+    "max_retries": 0,
+    "discover_bucket_region": false,
+    "disable_pre_signed_ui": false
+  }
+}]`)
+	viper.SetConfigType("yaml")
+	viper.SetEnvPrefix("LAKEFS")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	viper.AutomaticEnv()
+	require.NoError(t, viper.ReadConfig(strings.NewReader(`
+database:
+  type: local
+auth:
+  encrypt:
+    secret_key: auth-secret
+blockstores:
+  signing:
+    secret_key: signing-secret
+`)))
+
+	cfg, err := config.BuildConfig("")
+	require.NoError(t, err)
+
+	storage := cfg.StorageConfig().GetStorageByID("alpha").(*config.BlockstoreStorage)
+	require.NotNil(t, storage.S3)
+	require.Equal(t, 0, storage.S3.MaxRetries)
+	require.False(t, storage.S3.DiscoverBucketRegion)
+	require.False(t, storage.S3.DisablePreSignedUI)
+	require.Equal(t, config.DefaultBlockstoreS3Region, storage.S3.Region)
+	require.Equal(t, config.DefaultBlockstoreS3PreSignedExpiry, storage.S3.PreSignedExpiry)
+}
+
 func TestValidateBlockstoreReturnsErrorForNilSelectedBackendConfig(t *testing.T) {
 	blockstoreConfig := &config.Blockstore{}
 	blockstoreConfig.Signing.SecretKey = "signing-secret"

@@ -1,10 +1,12 @@
 package io.treeverse.clients
 
-import io.lakefs.clients.sdk.ApiException
+import io.lakefs.clients.sdk.{ApiException, ConfigApi}
 import io.lakefs.clients.sdk.model.{
+  Config,
   GarbageCollectionPrepareResponse,
-  TaskCreation,
-  PrepareGarbageCollectionCommitsStatus
+  PrepareGarbageCollectionCommitsStatus,
+  StorageConfig,
+  TaskCreation
 }
 import org.apache.http.HttpStatus
 import org.scalatest.funspec._
@@ -14,6 +16,7 @@ import org.mockito.Mockito
 import org.mockito.ArgumentMatchers.anyString
 
 import java.net.URI
+import java.util.Arrays
 
 class ApiClientSpec extends AnyFunSpec with Matchers with MockitoSugar {
   describe("translateURI") {
@@ -72,6 +75,53 @@ class ApiClientSpec extends AnyFunSpec with Matchers with MockitoSugar {
       it("should return the same URI") {
         translate(pathUri) should be(pathUri)
       }
+    }
+  }
+
+  describe("getBlockstoreType") {
+    it("should use a one-entry canonical storage config list") {
+      val conf = APIConfigurations("http://localhost:8000/api/v1/one-store", "access-one", "secret")
+      val apiClient = ApiClient.get(conf)
+      val mockConfigApi = Mockito.mock(classOf[ConfigApi])
+      val getConfigRequest = Mockito.mock(classOf[ConfigApi#APIgetConfigRequest])
+      val cfg = new Config()
+        .storageConfigList(
+          Arrays.asList(
+            new StorageConfig()
+              .blockstoreId("alpha")
+              .blockstoreType(StorageUtils.StorageTypeS3)
+          )
+        )
+
+      Mockito.when(mockConfigApi.getConfig()).thenReturn(getConfigRequest)
+      Mockito.when(getConfigRequest.execute()).thenReturn(cfg)
+      apiClient.setConfigApiForTesting(mockConfigApi)
+
+      apiClient.getBlockstoreType("alpha") should be(StorageUtils.StorageTypeS3)
+    }
+
+    it("should select from a multi-entry canonical storage config list") {
+      val conf = APIConfigurations("http://localhost:8000/api/v1/multi-store", "access-multi", "secret")
+      val apiClient = ApiClient.get(conf)
+      val mockConfigApi = Mockito.mock(classOf[ConfigApi])
+      val getConfigRequest = Mockito.mock(classOf[ConfigApi#APIgetConfigRequest])
+      val cfg = new Config()
+        .storageConfigList(
+          Arrays.asList(
+            new StorageConfig()
+              .blockstoreId("alpha")
+              .blockstoreType(StorageUtils.StorageTypeS3),
+            new StorageConfig()
+              .blockstoreId("beta")
+              .blockstoreType(StorageUtils.StorageTypeAzure)
+          )
+        )
+
+      Mockito.when(mockConfigApi.getConfig()).thenReturn(getConfigRequest)
+      Mockito.when(getConfigRequest.execute()).thenReturn(cfg)
+      apiClient.setConfigApiForTesting(mockConfigApi)
+
+      apiClient.getBlockstoreType("beta") should be(StorageUtils.StorageTypeAzure)
     }
   }
 
