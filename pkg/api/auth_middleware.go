@@ -28,15 +28,21 @@ func extractSecurityRequirements(router routers.Router, r *http.Request) (openap
 	return *route.Operation.Security, nil
 }
 
-func GenericAuthMiddleware(logger logging.Logger, authenticator auth.Authenticator, authService auth.Service, oidcConfig *auth.OIDCConfig, cookieAuthConfig *auth.CookieAuthConfig) (func(next http.Handler) http.Handler, error) {
+func GenericAuthMiddleware(logger logging.Logger, authenticator auth.Authenticator, authService auth.Service, externalIdentityProvisioner *auth.ExternalIdentityProvisioner, oidcConfig *auth.OIDCConfig, cookieAuthConfig *auth.CookieAuthConfig, secureCookies bool) (func(next http.Handler) http.Handler, error) {
 	swagger, err := apigen.GetSwagger()
 	if err != nil {
 		return nil, err
 	}
-	sessionStore := sessions.NewCookieStore(authService.SecretStore().SharedSecret())
+	sessionStore, err := auth.NewSessionStore(authService.SecretStore().SharedSecret(), auth.SessionStoreOptions{
+		MaxAge: sessionMaxAge,
+		Secure: secureCookies,
+	})
+	if err != nil {
+		return nil, err
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			user, err := checkSecurityRequirements(r, swagger.Security, logger, authenticator, authService, sessionStore, oidcConfig, cookieAuthConfig)
+			user, err := checkSecurityRequirements(w, r, swagger.Security, logger, authenticator, authService, externalIdentityProvisioner, sessionStore, oidcConfig, cookieAuthConfig)
 			if err != nil {
 				writeAuthError(w, r, err, http.StatusUnauthorized, ErrAuthenticatingRequest.Error())
 				return
@@ -50,7 +56,7 @@ func GenericAuthMiddleware(logger logging.Logger, authenticator auth.Authenticat
 	}, nil
 }
 
-func AuthMiddleware(logger logging.Logger, swagger *openapi3.T, authenticator auth.Authenticator, authService auth.Service, sessionStore sessions.Store, oidcConfig *auth.OIDCConfig, cookieAuthConfig *auth.CookieAuthConfig) func(next http.Handler) http.Handler {
+func AuthMiddleware(logger logging.Logger, swagger *openapi3.T, authenticator auth.Authenticator, authService auth.Service, externalIdentityProvisioner *auth.ExternalIdentityProvisioner, sessionStore sessions.Store, oidcConfig *auth.OIDCConfig, cookieAuthConfig *auth.CookieAuthConfig) func(next http.Handler) http.Handler {
 	router, err := legacy.NewRouter(swagger)
 	if err != nil {
 		panic(err)
@@ -67,7 +73,7 @@ func AuthMiddleware(logger logging.Logger, swagger *openapi3.T, authenticator au
 				writeAuthError(w, r, err, http.StatusBadRequest, err.Error())
 				return
 			}
-			user, err := checkSecurityRequirements(r, securityRequirements, logger, authenticator, authService, sessionStore, oidcConfig, cookieAuthConfig)
+			user, err := checkSecurityRequirements(w, r, securityRequirements, logger, authenticator, authService, externalIdentityProvisioner, sessionStore, oidcConfig, cookieAuthConfig)
 			if err != nil {
 				writeAuthError(w, r, err, http.StatusUnauthorized, ErrAuthenticatingRequest.Error())
 				return
@@ -84,17 +90,51 @@ func AuthMiddleware(logger logging.Logger, swagger *openapi3.T, authenticator au
 // checkSecurityRequirements goes over the security requirements and checks the authentication.
 // It returns the user information and error if the security check was required.
 // It will return nil user and nil error in case of no security checks to match.
-func checkSecurityRequirements(r *http.Request,
+func checkSecurityRequirements(w http.ResponseWriter,
+	r *http.Request,
 	securityRequirements openapi3.SecurityRequirements,
 	logger logging.Logger,
 	authenticator auth.Authenticator,
 	authService auth.Service,
+	externalIdentityProvisioner *auth.ExternalIdentityProvisioner,
 	sessionStore sessions.Store,
 	oidcConfig *auth.OIDCConfig,
 	cookieAuthConfig *auth.CookieAuthConfig,
 ) (*model.User, error) {
 	ctx := r.Context()
 	logger = logger.WithContext(ctx)
+	var firstSessionAuthErr error
+
+	rememberSessionAuthErr := func(err error) {
+		if firstSessionAuthErr == nil {
+			firstSessionAuthErr = err
+		}
+	}
+	expireSession := func(sessionName string) {
+		if err := auth.ClearSession(w, r, sessionStore, sessionName); err != nil {
+			logger.WithError(err).WithField("session_name", sessionName).Warn("failed to expire authentication session")
+		}
+	}
+	handleSessionGetErr := func(sessionName string, err error) (bool, error) {
+		if err == nil {
+			return false, nil
+		}
+		if !auth.IsSessionDecodeError(err) {
+			return false, err
+		}
+		logger.WithError(err).WithField("session_name", sessionName).Warn("authentication session decode failed")
+		rememberSessionAuthErr(err)
+		expireSession(sessionName)
+		return true, nil
+	}
+	handleSessionAuthErr := func(sessionName string, err error) bool {
+		if !errors.Is(err, auth.ErrAuthenticatingRequest) {
+			return false
+		}
+		rememberSessionAuthErr(err)
+		expireSession(sessionName)
+		return true
+	}
 
 	for _, securityRequirement := range securityRequirements {
 		for provider := range securityRequirement {
@@ -121,7 +161,14 @@ func checkSecurityRequirements(r *http.Request,
 				}
 				user, err = auth.UserByAuth(ctx, authenticator, authService, accessKey, secretKey)
 			case "cookie_auth":
-				internalAuthSession, _ := sessionStore.Get(r, auth.InternalAuthSessionName)
+				internalAuthSession, getErr := sessionStore.Get(r, auth.InternalAuthSessionName)
+				recovered, handleErr := handleSessionGetErr(auth.InternalAuthSessionName, getErr)
+				if handleErr != nil {
+					return nil, handleErr
+				}
+				if recovered {
+					continue
+				}
 				token := ""
 				if internalAuthSession != nil {
 					token, _ = internalAuthSession.Values[auth.TokenSessionKeyName].(string)
@@ -130,24 +177,52 @@ func checkSecurityRequirements(r *http.Request,
 					continue
 				}
 				user, err = auth.UserByToken(ctx, authService, token)
+				if err == nil && user != nil && auth.SessionNeedsEncodingUpgrade(internalAuthSession) {
+					err = auth.SaveSession(r, w, internalAuthSession)
+				}
 			case "oidc_auth":
 				oidcSession, getErr := sessionStore.Get(r, auth.OIDCAuthSessionName)
-				if getErr != nil {
-					return nil, getErr
+				recovered, handleErr := handleSessionGetErr(auth.OIDCAuthSessionName, getErr)
+				if handleErr != nil {
+					return nil, handleErr
 				}
-				user, err = auth.UserFromOIDCSession(ctx, logger, authService, oidcSession, oidcConfig)
+				if recovered {
+					continue
+				}
+				user, err = auth.UserFromOIDCSession(ctx, logger, externalIdentityProvisioner, oidcSession, oidcConfig)
 			case "saml_auth":
 				samlSession, getErr := sessionStore.Get(r, auth.SAMLAuthSessionName)
-				if getErr != nil {
-					return nil, getErr
+				recovered, handleErr := handleSessionGetErr(auth.SAMLAuthSessionName, getErr)
+				if handleErr != nil {
+					return nil, handleErr
 				}
-				user, err = auth.UserFromSAMLSession(ctx, logger, authService, samlSession, cookieAuthConfig)
+				if recovered {
+					continue
+				}
+				user, err = auth.UserFromSAMLSession(ctx, logger, externalIdentityProvisioner, samlSession, cookieAuthConfig)
+				if err == nil && user != nil && auth.SessionNeedsEncodingUpgrade(samlSession) {
+					err = auth.SaveSession(r, w, samlSession)
+				}
 			default:
 				logger.WithField("provider", provider).Error("Authentication middleware unknown security requirement provider")
 				return nil, auth.ErrAuthenticatingRequest
 			}
 
 			if err != nil {
+				switch provider {
+				case "cookie_auth":
+					if handleSessionAuthErr(auth.InternalAuthSessionName, err) {
+						continue
+					}
+				case "oidc_auth":
+					if handleSessionAuthErr(auth.OIDCAuthSessionName, err) {
+						continue
+					}
+				case "saml_auth":
+					if handleSessionAuthErr(auth.SAMLAuthSessionName, err) {
+						continue
+					}
+				}
 				return nil, err
 			}
 			if user != nil {
@@ -156,6 +231,9 @@ func checkSecurityRequirements(r *http.Request,
 		}
 	}
 
+	if firstSessionAuthErr != nil {
+		return nil, firstSessionAuthErr
+	}
 	return nil, nil
 }
 

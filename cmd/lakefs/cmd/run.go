@@ -106,8 +106,13 @@ var runCmd = &cobra.Command{
 		idGen := &actions.DecreasingIDGenerator{}
 
 		authService := authfactory.NewAuthService(ctx, cfg, logger, kvStore, authMetadataManager)
+		externalIdentityProvisioner := auth.NewExternalIdentityProvisioner(
+			authService,
+			kvStore,
+			logger.WithField("service", "external_identity_provisioner"),
+		)
 
-		authenticationService, err := authentication.NewAuthenticationService(ctx, cfg, logger)
+		authenticationService, err := authentication.NewAuthenticationService(ctx, cfg, authService, externalIdentityProvisioner, logger)
 		if err != nil {
 			logger.WithError(err).Fatal("failed to create authentication service")
 		}
@@ -224,6 +229,7 @@ var runCmd = &cobra.Command{
 			c,
 			middlewareAuthenticator,
 			authService,
+			externalIdentityProvisioner,
 			authenticationService,
 			blockStore,
 			authMetadataManager,
@@ -255,8 +261,10 @@ var runCmd = &cobra.Command{
 			logger.WithField("service", "s3_gateway"),
 			middlewareAuthenticator,
 			authService,
+			externalIdentityProvisioner,
 			&oidcConfig,
 			&cookieAuthConfig,
+			api.SecureSessionCookies(cfg),
 		)
 		if err != nil {
 			logger.WithError(err).Fatal("could not initialize authenticator for S3 gateway")
@@ -341,7 +349,11 @@ var runCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		printWelcome(os.Stderr, buf.String())
-		gracefulShutdown(ctx, server)
+		shutdownServices := []Shutter{server}
+		if shutter, ok := authenticationService.(Shutter); ok {
+			shutdownServices = append(shutdownServices, shutter)
+		}
+		gracefulShutdown(ctx, shutdownServices...)
 	},
 }
 

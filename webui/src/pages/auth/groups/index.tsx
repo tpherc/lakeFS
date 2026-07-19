@@ -24,7 +24,6 @@ import { EntityActionModal } from '../../../lib/components/auth/forms';
 import { disallowPercentSign, INVALID_GROUP_NAME_ERROR_MESSAGE } from '../validation';
 import { useLoginConfigContext } from '../../../lib/hooks/conf';
 import { useAuthOutletContext } from '../../../lib/components/auth/layout';
-import { FeatureLockedEmptyState } from '../../../lib/components/auth/enterpriseUpgrade';
 
 interface PermissionTypes {
     Read: string;
@@ -269,7 +268,7 @@ export const GroupsPage = () => {
     const { RBAC: rbac } = useLoginConfigContext();
     useEffect(() => setActiveTab('groups'), [setActiveTab]);
     if (rbac === 'none') {
-        return <FeatureLockedEmptyState feature="groups" />;
+        return <div className="p-4 text-center text-muted">Feature disabled</div>;
     }
     return <GroupsContainer />;
 };

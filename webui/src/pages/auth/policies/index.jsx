@@ -24,7 +24,6 @@ import { useRouter } from '../../../lib/hooks/router';
 import { useLoginConfigContext } from '../../../lib/hooks/conf';
 import { Link } from '../../../lib/components/nav';
 import { disallowPercentSign, INVALID_POLICY_ID_ERROR_MESSAGE } from '../validation';
-import { FeatureLockedEmptyState } from '../../../lib/components/auth/enterpriseUpgrade';
 
 const PoliciesContainer = () => {
     const [selected, setSelected] = useState([]);
@@ -170,7 +169,7 @@ const PoliciesPage = () => {
     const { RBAC: rbac } = useLoginConfigContext();
     useEffect(() => setActiveTab('policies'), [setActiveTab]);
     if (rbac === 'none') {
-        return <FeatureLockedEmptyState feature="policies" />;
+        return <div className="p-4 text-center text-muted">Feature disabled</div>;
     }
     return <PoliciesContainer />;
 };

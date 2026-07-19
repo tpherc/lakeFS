@@ -74,8 +74,10 @@ func setBaseDefaults(cfgType string) {
 	viper.SetDefault("auth.login_max_duration", 14*24*time.Hour)
 
 	viper.SetDefault("auth.ui_config.rbac", "none")
+	viper.SetDefault("auth.ui_config.login_url_method", "redirect")
 	viper.SetDefault("auth.ui_config.login_failed_message", "The credentials don't match.")
 	viper.SetDefault("auth.ui_config.login_cookie_names", "internal_auth_session")
+	viper.SetDefault("auth.ui_config.logout_url", "/logout")
 	viper.SetDefault("auth.ui_config.use_login_placeholders", false)
 
 	viper.SetDefault("auth.remote_authenticator.default_user_group", "Viewers")
@@ -84,6 +86,8 @@ func setBaseDefaults(cfgType string) {
 	viper.SetDefault("auth.api.health_check_timeout", DefaultAuthAPIHealthCheckTimeout)
 	viper.SetDefault("auth.oidc.persist_friendly_name", false)
 	viper.SetDefault("auth.cookie_auth_verification.persist_friendly_name", false)
+
+	viper.SetDefault("features.local_rbac", true)
 
 	viper.SetDefault("committed.local_cache.size_bytes", 1*1024*1024*1024)
 	viper.SetDefault("committed.local_cache.dir", "~/lakefs/data/cache")

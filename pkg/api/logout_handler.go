@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/gorilla/sessions"
@@ -11,9 +13,7 @@ import (
 // NewLogoutHandler returns a handler to clear the user sessions and redirect the user to the login page.
 func NewLogoutHandler(sessionStore sessions.Store, logger logging.Logger, logoutRedirectURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		err := clearSession(w, r, sessionStore, auth.InternalAuthSessionName)
-		if err != nil {
-			logger.WithError(err).Error("Failed to clear internal session during logout")
+		if err := clearLogoutSessions(w, r, sessionStore, logger); err != nil {
 			writeError(w, r, http.StatusInternalServerError, err)
 			return
 		}
@@ -21,8 +21,15 @@ func NewLogoutHandler(sessionStore sessions.Store, logger logging.Logger, logout
 	}
 }
 
-func clearSession(w http.ResponseWriter, r *http.Request, sessionStore sessions.Store, sessionName string) error {
-	session, _ := sessionStore.Get(r, sessionName)
-	session.Options.MaxAge = -1
-	return session.Save(r, w)
+func clearLogoutSessions(w http.ResponseWriter, r *http.Request, sessionStore sessions.Store, logger logging.Logger) error {
+	// Logout succeeds only when all lakeFS-owned auth sessions are cleared.
+	// Keep attempting every clear so one failure does not mask others.
+	var errs []error
+	for _, sessionName := range []string{auth.InternalAuthSessionName, auth.OIDCAuthSessionName, auth.SAMLAuthSessionName} {
+		if err := auth.ClearSession(w, r, sessionStore, sessionName); err != nil {
+			logger.WithError(err).WithField("session", sessionName).Error("Failed to clear session during logout")
+			errs = append(errs, fmt.Errorf("%s: %w", sessionName, err))
+		}
+	}
+	return errors.Join(errs...)
 }

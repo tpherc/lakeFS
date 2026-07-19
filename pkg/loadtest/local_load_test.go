@@ -85,12 +85,13 @@ func TestLocalLoad(t *testing.T) {
 		_ = c.Close()
 	})
 	auditChecker := version.NewDefaultAuditChecker(baseCfg.Security.AuditCheckURL, "", nil)
-	authenticationService := authentication.NewDummyService()
+	authenticationService := authentication.NewDummyService("/auth/login")
 	handler := api.Serve(
 		cfg,
 		c,
 		authenticator,
 		authService,
+		auth.NewExternalIdentityProvisioner(authService, kvStore, logger),
 		authenticationService,
 		blockAdapter,
 		meta,

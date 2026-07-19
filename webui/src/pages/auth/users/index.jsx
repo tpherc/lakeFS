@@ -28,7 +28,6 @@ import { allUsersFromLakeFS } from '../../../lib/components/auth/users';
 import { useRouter } from '../../../lib/hooks/router';
 import { useAuth } from '../../../lib/auth/authContext';
 import { useLoginConfigContext } from '../../../lib/hooks/conf';
-import { FeatureLockedEmptyState } from '../../../lib/components/auth/enterpriseUpgrade';
 
 const DEFAULT_LISTING_AMOUNT = 100;
 const DECIMAL_RADIX = 10;
@@ -253,7 +252,7 @@ const UsersIndexPage = () => {
     }, [rbacDisabled, setActiveTab]);
 
     if (rbacDisabled) {
-        return <FeatureLockedEmptyState feature="users" />;
+        return <div className="p-4 text-center text-muted">Feature disabled</div>;
     }
 
     return (

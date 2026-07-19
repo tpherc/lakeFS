@@ -1,72 +1,84 @@
 import react from '@vitejs/plugin-react-swc';
 import eslintPlugin from 'vite-plugin-eslint2';
 import replace from '@rollup/plugin-replace';
-import * as http from "node:http";
+import * as http from 'node:http';
 
 // https://vitejs.dev/config/
 export default ({ command }) => {
-  const baseConfig = {
-    test: {
-      environment: 'happy-dom',
-      exclude: ["./test/e2e/**/*", "./node_modules/**/*"],
-      setupFiles: './test/setup.js',
-    },
-    plugins: [
-      replace({
-          preventAssignment: true,
-          include: ['src/**/*.jsx', 'src/**/*.js'],
-          values: {
-            __buildVersion: process.env.VERSION || 'dev',
-          }
-      }),
-      react(),
-      eslintPlugin({
-        include: ['src/**/*.jsx', 'src/**/*.js', 'src/**/*.ts', 'src/**/*.tsx']
-      }),
-    ],
-    publicDir: './pub',
-  };
+    const plugins = [
+        replace({
+            preventAssignment: true,
+            include: ['src/**/*.jsx', 'src/**/*.js'],
+            values: {
+                __buildVersion: process.env.VERSION || 'dev',
+            },
+        }),
+        react(),
+    ];
 
-  // in development
-  if (command === 'serve' || command === 'test') {
-    return {
-      ...baseConfig,
-      server: {
-        port: 3000,
-        proxy: {
-          '/api': {
-            target: 'http://localhost:8000',
-            changeOrigin: true,
-            secure: false
-          },
-          '/oidc/login': {
-            target: 'http://localhost:8000',
-            changeOrigin: false,
-            secure: false
-          },
-          '/logout': {
-            target: 'http://localhost:8000',
-            changeOrigin: false,
-            secure: false
-          },
-          '/': {
-            target: 'http://localhost:8000',
-            changeOrigin: false,
-            secure: false,
-            bypass: (req: http.IncomingMessage) : void | null | undefined | false | string => {
-              if ("x-amz-date" in req.headers) {
-                return null;
-              }
-              return req.url;
-            }
-          }
-        }
-      },
-      build: {
-        sourcemap: 'inline',
-      },
+    if (command !== 'test') {
+        plugins.push(
+            eslintPlugin({
+                include: ['src/**/*.jsx', 'src/**/*.js', 'src/**/*.ts', 'src/**/*.tsx'],
+            }),
+        );
+    }
+
+    const baseConfig = {
+        test: {
+            environment: 'happy-dom',
+            exclude: ['./test/e2e/**/*', './node_modules/**/*'],
+            setupFiles: './test/setup.js',
+        },
+        plugins,
+        publicDir: './pub',
     };
-  } 
-  // while building
-  return baseConfig;
+
+    // in development
+    if (command === 'serve' || command === 'test') {
+        return {
+            ...baseConfig,
+            server: {
+                port: 3000,
+                proxy: {
+                    '/api': {
+                        target: 'http://localhost:8000',
+                        changeOrigin: true,
+                        secure: false,
+                    },
+                    '/oidc/login': {
+                        target: 'http://localhost:8000',
+                        changeOrigin: false,
+                        secure: false,
+                    },
+                    '/oidc/logout': {
+                        target: 'http://localhost:8000',
+                        changeOrigin: false,
+                        secure: false,
+                    },
+                    '/logout': {
+                        target: 'http://localhost:8000',
+                        changeOrigin: false,
+                        secure: false,
+                    },
+                    '/': {
+                        target: 'http://localhost:8000',
+                        changeOrigin: false,
+                        secure: false,
+                        bypass: (req: http.IncomingMessage): void | null | undefined | false | string => {
+                            if ('x-amz-date' in req.headers) {
+                                return null;
+                            }
+                            return req.url;
+                        },
+                    },
+                },
+            },
+            build: {
+                sourcemap: 'inline',
+            },
+        };
+    }
+    // while building
+    return baseConfig;
 };

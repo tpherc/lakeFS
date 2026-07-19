@@ -7,10 +7,14 @@
 > This is a fork of [treeverse/lakeFS](https://github.com/treeverse/lakeFS) that enables **Role-Based Access Control (RBAC)** for the open-source version. The upstream OSS release only supports single-user mode, with RBAC reserved for lakeFS Enterprise.
 >
 > **What's enabled:**
-> - `auth.ui_config.rbac: internal` — Full RBAC with users, groups, and policies
+> - `auth.ui_config.rbac: internal` with `features.local_rbac: true` — Full local RBAC with users, groups, and policies
 > - `auth.ui_config.rbac: simplified` — Multi-user with ACL-based permissions
+> - `auth.providers.oidc` — OIDC SSO
 >
-> See [PR #1](https://github.com/Face-to-Face-IT/lakeFS/pull/1) for details. All code is Apache 2.0 licensed.
+> **Compatibility note:** set `features.local_rbac: false` when `auth.ui_config.rbac: internal` should use an external auth API service through `auth.api.*`.
+> Switching from an external OIDC auth service to embedded OIDC requires users to sign in again; existing OIDC session cookies are not migrated.
+>
+> See [PR #1](https://github.com/Face-to-Face-IT/lakeFS/pull/1) for details. lakeFS-owned code remains Apache 2.0 licensed. This fork includes HashiCorp CAP v0.13.0 under MPL-2.0; see `NOTICE` and `LICENSES/MPL-2.0.txt`.
 
 <p align="center">
 	<a href="https://raw.githubusercontent.com/treeverse/lakeFS/master/LICENSE" >

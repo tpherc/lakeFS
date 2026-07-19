@@ -10,7 +10,6 @@ import (
 	"github.com/getkin/kin-openapi/routers"
 	"github.com/getkin/kin-openapi/routers/legacy"
 	"github.com/go-chi/chi/v5"
-	"github.com/gorilla/sessions"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/treeverse/lakefs/pkg/api/apigen"
 	"github.com/treeverse/lakefs/pkg/api/apiutil"
@@ -38,6 +37,7 @@ func Serve(
 	catalog *catalog.Catalog,
 	authenticator auth.Authenticator,
 	authService auth.Service,
+	externalIdentityProvisioner *auth.ExternalIdentityProvisioner,
 	authenticationService authentication.Service,
 	blockAdapter block.Adapter,
 	metadataManager auth.MetadataManager,
@@ -56,18 +56,16 @@ func Serve(
 	if err != nil {
 		panic(err)
 	}
-	sessionStore := sessions.NewCookieStore(authService.SecretStore().SharedSecret())
-	// Configure cookie options to allow HTTP (for testing).
-	// gorilla/sessions v1.4.0 changed defaults to "Secure:true" and "SameSite:None" -which breaks OAuth callbacks over HTTP
-	sessionStore.Options = &sessions.Options{
-		Path:     "/",
-		MaxAge:   sessionMaxAge,
-		HttpOnly: true,
-		Secure:   cfg.GetBaseConfig().TLS.Enabled, // Only set Secure flag when TLS is enabled
-		SameSite: http.SameSiteLaxMode,            // Lax allows OAuth callback redirects
+	baseAuthConfig := cfg.AuthConfig().GetBaseAuthConfig()
+	sessionStore, err := auth.NewSessionStore(authService.SecretStore().SharedSecret(), auth.SessionStoreOptions{
+		MaxAge: sessionMaxAge,
+		Secure: SecureSessionCookies(cfg),
+	})
+	if err != nil {
+		panic(err)
 	}
-	oidcConfig := auth.OIDCConfig(cfg.AuthConfig().GetBaseAuthConfig().OIDC)
-	cookieAuthConfig := auth.CookieAuthConfig(cfg.AuthConfig().GetBaseAuthConfig().CookieAuthVerification)
+	oidcConfig := auth.OIDCConfig(baseAuthConfig.OIDC)
+	cookieAuthConfig := auth.CookieAuthConfig(baseAuthConfig.CookieAuthVerification)
 	r := chi.NewRouter()
 	apiRouter := r.With(
 		OapiRequestValidatorWithOptions(swagger, &openapi3filter.Options{
@@ -79,7 +77,7 @@ func Serve(
 			cfg.GetBaseConfig().Logging.AuditLogLevel,
 			cfg.GetBaseConfig().Logging.TraceRequestHeaders,
 			authService.IsAdvancedAuth()),
-		AuthMiddleware(logger, swagger, authenticator, authService, sessionStore, &oidcConfig, &cookieAuthConfig),
+		AuthMiddleware(logger, swagger, authenticator, authService, externalIdentityProvisioner, sessionStore, &oidcConfig, &cookieAuthConfig),
 		MetricsMiddleware(swagger, requestHistograms, requestCounter),
 	)
 	controller := NewController(
@@ -106,7 +104,11 @@ func Serve(
 	r.Mount("/_pprof/", httputil.ServePPROF("/_pprof/"))
 	r.Mount("/openapi.json", http.HandlerFunc(swaggerSpecHandler))
 	r.Mount(apiutil.BaseURL, http.HandlerFunc(InvalidAPIEndpointHandler))
-	r.Mount("/logout", NewLogoutHandler(sessionStore, logger, cfg.AuthConfig().GetBaseAuthConfig().LogoutRedirectURL))
+	logoutHandler := NewLogoutHandler(sessionStore, logger, authenticationService.LogoutRedirectURL())
+	r.Mount("/logout", logoutHandler)
+	if baseAuthConfig.Providers.OIDC.IsConfigured() {
+		r.Mount("/oidc/logout", logoutHandler)
+	}
 
 	// Configuration flag to control if the embedded UI is served
 	// or not and assign the correct handler for each case.
@@ -126,6 +128,14 @@ func Serve(
 	authenticationService.RegisterAdditionalRoutes(r, sessionStore)
 
 	return r
+}
+
+func SecureSessionCookies(cfg config.Config) bool {
+	if cfg.GetBaseConfig().TLS.Enabled {
+		return true
+	}
+	provider := cfg.AuthConfig().GetBaseAuthConfig().Providers.OIDC
+	return provider != nil && provider.RequiresSecureCookies()
 }
 
 func swaggerSpecHandler(w http.ResponseWriter, _ *http.Request) {

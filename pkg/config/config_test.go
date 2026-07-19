@@ -197,3 +197,341 @@ func TestConfig_JSONLogger(t *testing.T) {
 		t.Fatalf("expected a msg field, could not find one")
 	}
 }
+
+func TestAuth_GetLoginURLMethodConfigParam_ResolvesEmptyLoginURLToNone(t *testing.T) {
+	authConfig := &config.Auth{}
+	authConfig.LoginURLMethod = "redirect"
+
+	require.Equal(t, "none", authConfig.GetLoginURLMethodConfigParam())
+
+	authConfig.LoginURL = "/oidc/login"
+	authConfig.LoginURLMethod = ""
+	require.Equal(t, "redirect", authConfig.GetLoginURLMethodConfigParam())
+
+	authConfig.LoginURLMethod = "select"
+	require.Equal(t, "select", authConfig.GetLoginURLMethodConfigParam())
+}
+
+func TestAuth_ValidateLoginURLMethod(t *testing.T) {
+	for _, method := range []string{"", "redirect", "select"} {
+		t.Run(method, func(t *testing.T) {
+			authConfig := &config.Auth{}
+			authConfig.LoginURLMethod = method
+			require.NoError(t, authConfig.Validate())
+		})
+	}
+
+	authConfig := &config.Auth{}
+	authConfig.LoginURLMethod = "popup"
+	require.Error(t, authConfig.Validate())
+}
+
+func TestOIDCProviderValidateAuthorizeAndLogoutParameters(t *testing.T) {
+	base := validOIDCProviderConfig()
+	tests := []struct {
+		name string
+		mut  func(*config.OIDCProvider)
+	}{
+		{
+			name: "reserved parameter with whitespace",
+			mut: func(p *config.OIDCProvider) {
+				p.AuthorizeEndpointQueryParameters = map[string]string{" STATE ": "value"}
+			},
+		},
+		{
+			name: "negative max age",
+			mut: func(p *config.OIDCProvider) {
+				p.AuthorizeEndpointQueryParameters = map[string]string{"max_age": "-1"}
+			},
+		},
+		{
+			name: "non numeric max age",
+			mut: func(p *config.OIDCProvider) {
+				p.AuthorizeEndpointQueryParameters = map[string]string{"max_age": "soon"}
+			},
+		},
+		{
+			name: "overflow max age",
+			mut: func(p *config.OIDCProvider) {
+				p.AuthorizeEndpointQueryParameters = map[string]string{"max_age": "999999999999999999999"}
+			},
+		},
+		{
+			name: "odd logout query pairs",
+			mut: func(p *config.OIDCProvider) {
+				p.LogoutEndpointQueryParameters = []string{"returnTo"}
+			},
+		},
+		{
+			name: "empty logout query key",
+			mut: func(p *config.OIDCProvider) {
+				p.LogoutEndpointQueryParameters = []string{" ", "https://lakefs.example"}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := base
+			tt.mut(&cfg)
+			require.ErrorIs(t, cfg.Validate(), config.ErrBadConfiguration)
+		})
+	}
+
+	cfg := base
+	cfg.AuthorizeEndpointQueryParameters = map[string]string{"max_age": "0", " login_hint ": "alice@example.com"}
+	maxAge, params, err := cfg.SplitAuthorizeEndpointQueryParameters()
+	require.NoError(t, err)
+	require.NotNil(t, maxAge)
+	require.Equal(t, uint(0), *maxAge)
+	require.Equal(t, map[string]string{"login_hint": "alice@example.com"}, params)
+}
+
+func TestOIDCProviderValidatePartialProviderBlocks(t *testing.T) {
+	var absent *config.OIDCProvider
+	require.False(t, absent.IsConfigured())
+	require.NoError(t, absent.Validate())
+
+	tests := []struct {
+		name    string
+		cfg     config.OIDCProvider
+		wantErr string
+	}{
+		{
+			name:    "empty block",
+			cfg:     config.OIDCProvider{},
+			wantErr: "auth.providers.oidc.url is required",
+		},
+		{
+			name: "optional scope only",
+			cfg: config.OIDCProvider{
+				AdditionalScopeClaims: []string{"email"},
+			},
+			wantErr: "auth.providers.oidc.url is required",
+		},
+		{
+			name: "logout-only valid key value list",
+			cfg: config.OIDCProvider{
+				LogoutEndpointQueryParameters: []string{"returnTo", "https://lakefs.example/auth/login"},
+			},
+			wantErr: "auth.providers.oidc.url is required",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.True(t, tt.cfg.IsConfigured())
+			err := tt.cfg.Validate()
+			require.ErrorIs(t, err, config.ErrBadConfiguration)
+			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestOIDCProviderBlockPresenceFromYAML(t *testing.T) {
+	tests := []struct {
+		name        string
+		oidcBlock   string
+		wantPresent bool
+		wantErr     string
+	}{
+		{
+			name:        "absent block leaves OIDC disabled",
+			wantPresent: false,
+		},
+		{
+			name:        "empty block fails required fields",
+			oidcBlock:   "      oidc: {}\n",
+			wantPresent: true,
+			wantErr:     "auth.providers.oidc.url is required",
+		},
+		{
+			name: "optional-only block fails required fields",
+			oidcBlock: `      oidc:
+        additional_scope_claims:
+          - email
+`,
+			wantPresent: true,
+			wantErr:     "auth.providers.oidc.url is required",
+		},
+		{
+			name: "complete block enables OIDC",
+			oidcBlock: `      oidc:
+        url: https://idp.example
+        client_id: lakefs
+        client_secret: secret
+        callback_base_url: https://lakefs.example
+`,
+			wantPresent: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			viper.SetConfigType("yaml")
+			require.NoError(t, viper.ReadConfig(strings.NewReader(baseConfigYAMLWithOIDCProvider(tt.oidcBlock))))
+			cfg := &config.ConfigImpl{}
+			_, err := config.NewConfig("", cfg)
+			require.NoError(t, err)
+			err = cfg.Validate()
+			if tt.wantErr != "" {
+				require.ErrorIs(t, err, config.ErrBadConfiguration)
+				require.Contains(t, err.Error(), tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tt.wantPresent, cfg.Auth.Providers.OIDC != nil)
+		})
+	}
+}
+
+func baseConfigYAMLWithOIDCProvider(oidcBlock string) string {
+	providersBlock := ""
+	if oidcBlock != "" {
+		providersBlock = "  providers:\n" + oidcBlock
+	}
+	return `auth:
+  encrypt:
+    secret_key: "required in config"
+` + providersBlock + `
+database:
+  type: local
+
+blockstore:
+  type: local
+  local:
+    path: /tmp
+`
+}
+
+func TestOIDCProviderValidateMalformedLogoutParameters(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  config.OIDCProvider
+	}{
+		{
+			name: "logout-only odd key value list",
+			cfg: config.OIDCProvider{
+				LogoutEndpointQueryParameters: []string{"returnTo"},
+			},
+		},
+		{
+			name: "logout-only whitespace key",
+			cfg: config.OIDCProvider{
+				LogoutEndpointQueryParameters: []string{" ", "https://lakefs.example/auth/login"},
+			},
+		},
+		{
+			name: "whitespace client ID key",
+			cfg: config.OIDCProvider{
+				LogoutClientIDQueryParameter: " ",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.True(t, tt.cfg.IsConfigured())
+			require.ErrorIs(t, tt.cfg.Validate(), config.ErrBadConfiguration)
+		})
+	}
+
+	cfg := validOIDCProviderConfig()
+	cfg.LogoutEndpointQueryParameters = []string{"returnTo", "https://lakefs.example/auth/login"}
+	require.NoError(t, cfg.Validate())
+}
+
+func TestOIDCProviderValidateHTTPSOrLoopback(t *testing.T) {
+	tests := []struct {
+		name string
+		mut  func(*config.OIDCProvider)
+		want bool
+	}{
+		{
+			name: "https provider and callback",
+			want: true,
+		},
+		{
+			name: "provider issuer may keep trailing slash",
+			mut: func(p *config.OIDCProvider) {
+				p.URL = "https://idp.example/tenant/"
+			},
+			want: true,
+		},
+		{
+			name: "http loopback provider and callback",
+			mut: func(p *config.OIDCProvider) {
+				p.URL = "http://127.0.0.1:5556"
+				p.CallbackBaseURL = "http://localhost:8000"
+			},
+			want: true,
+		},
+		{
+			name: "http provider rejected",
+			mut: func(p *config.OIDCProvider) {
+				p.URL = "http://idp.example"
+			},
+		},
+		{
+			name: "http callback rejected",
+			mut: func(p *config.OIDCProvider) {
+				p.CallbackBaseURL = "http://lakefs.example"
+			},
+		},
+		{
+			name: "mixed https and loopback callbacks rejected",
+			mut: func(p *config.OIDCProvider) {
+				p.CallbackBaseURL = ""
+				p.CallbackBaseURLs = []string{"https://lakefs.example", "http://127.0.0.1:8000"}
+			},
+		},
+		{
+			name: "provider issuer query rejected",
+			mut: func(p *config.OIDCProvider) {
+				p.URL = "https://idp.example?tenant=one"
+			},
+		},
+		{
+			name: "provider issuer fragment rejected",
+			mut: func(p *config.OIDCProvider) {
+				p.URL = "https://idp.example#issuer"
+			},
+		},
+		{
+			name: "plural callback path rejected",
+			mut: func(p *config.OIDCProvider) {
+				p.CallbackBaseURL = ""
+				p.CallbackBaseURLs = []string{"https://lakefs.example/base"}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validOIDCProviderConfig()
+			if tt.mut != nil {
+				tt.mut(&cfg)
+			}
+			err := cfg.Validate()
+			if tt.want {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, config.ErrBadConfiguration)
+		})
+	}
+}
+
+func TestOIDCProviderRequiresSecureCookies(t *testing.T) {
+	cfg := validOIDCProviderConfig()
+	require.True(t, cfg.RequiresSecureCookies())
+
+	cfg.CallbackBaseURL = "http://127.0.0.1:8000"
+	require.False(t, cfg.RequiresSecureCookies())
+}
+
+func validOIDCProviderConfig() config.OIDCProvider {
+	return config.OIDCProvider{
+		URL:             "https://idp.example",
+		ClientID:        "lakefs",
+		ClientSecret:    config.SecureString("secret"),
+		CallbackBaseURL: "https://lakefs.example",
+	}
+}

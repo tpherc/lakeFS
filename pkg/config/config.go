@@ -41,6 +41,9 @@ const (
 	AuthRBACSimplified = "simplified"
 	AuthRBACExternal   = "external"
 	AuthRBACInternal   = "internal"
+
+	AuthLoginURLMethodRedirect = "redirect"
+	AuthLoginURLMethodSelect   = "select"
 )
 
 type Logging struct {
@@ -541,6 +544,10 @@ type UIConfig interface {
 	GetCustomViewers() []apiparams.CustomViewer
 }
 
+type Features struct {
+	LocalRBAC bool `mapstructure:"local_rbac"`
+}
+
 // BaseConfig - Output struct of configuration, used to validate.  If you read a key using a viper accessor
 // rather than accessing a field of this struct, that key will *not* be validated.  So don't
 // do that.
@@ -653,6 +660,7 @@ type BaseConfig struct {
 		EnabledDeprecated bool          `mapstructure:"enabled"`
 		FlushInterval     time.Duration `mapstructure:"flush_interval"`
 	} `mapstructure:"usage_report"`
+	Features Features `mapstructure:"features"`
 }
 
 func (c *BaseConfig) GetVersionContext() string {
@@ -690,6 +698,7 @@ func ValidateBlockstore(c *Blockstore) error {
 
 // NewConfig - General (common) configuration
 func NewConfig(cfgType string, c Config) (*BaseConfig, error) {
+	oidcProviderInConfig := viper.InConfig("auth.providers.oidc")
 	// Inform viper of all expected fields.  Otherwise, it fails to deserialize from the
 	// environment.
 	storageSource := detectStorageConfigSource()
@@ -698,6 +707,7 @@ func NewConfig(cfgType string, c Config) (*BaseConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	preserveConfiguredProviderBlocks(c, oidcProviderInConfig)
 
 	cfg := c.GetBaseConfig()
 	resolvedStorage, err := ResolveBlockstoreConfig(&cfg.Blockstore, &cfg.Blockstores, storageSource)
@@ -725,6 +735,16 @@ func SetDefaults(cfgType string, c Config) {
 
 func Unmarshal(c Config) error {
 	return viper.UnmarshalExact(&c, DecoderConfig())
+}
+
+func preserveConfiguredProviderBlocks(c Config, oidcProviderInConfig bool) {
+	if !oidcProviderInConfig {
+		return
+	}
+	baseAuthCfg := c.AuthConfig().GetBaseAuthConfig()
+	if baseAuthCfg.Providers.OIDC == nil {
+		baseAuthCfg.Providers.OIDC = &OIDCProvider{}
+	}
 }
 
 func DecoderConfig() viper.DecoderConfigOption {
@@ -822,6 +842,7 @@ type BaseAuth struct {
 		RequestTimeout time.Duration `mapstructure:"request_timeout"`
 	} `mapstructure:"remote_authenticator"`
 	OIDC                   OIDC                   `mapstructure:"oidc"`
+	Providers              AuthProviders          `mapstructure:"providers"`
 	CookieAuthVerification CookieAuthVerification `mapstructure:"cookie_auth_verification"`
 	// LogoutRedirectURL is the URL on which to mount the
 	// server-side logout.
@@ -833,6 +854,7 @@ type BaseAuth struct {
 type AuthUIConfig struct {
 	RBAC                 string   `mapstructure:"rbac"`
 	LoginURL             string   `mapstructure:"login_url"`
+	LoginURLMethod       string   `mapstructure:"login_url_method"`
 	LoginFailedMessage   string   `mapstructure:"login_failed_message"`
 	FallbackLoginURL     *string  `mapstructure:"fallback_login_url"`
 	FallbackLoginLabel   *string  `mapstructure:"fallback_login_label"`
@@ -846,12 +868,34 @@ type Auth struct {
 	AuthUIConfig `mapstructure:"ui_config"`
 }
 
+type AuthProviders struct {
+	OIDC *OIDCProvider `mapstructure:"oidc"`
+}
+
+type OIDCProvider struct {
+	URL                              string            `mapstructure:"url"`
+	ClientID                         string            `mapstructure:"client_id"`
+	ClientSecret                     SecureString      `mapstructure:"client_secret"`
+	CallbackBaseURL                  string            `mapstructure:"callback_base_url"`
+	CallbackBaseURLs                 []string          `mapstructure:"callback_base_urls"`
+	AuthorizeEndpointQueryParameters map[string]string `mapstructure:"authorize_endpoint_query_parameters"`
+	LogoutEndpointQueryParameters    []string          `mapstructure:"logout_endpoint_query_parameters"`
+	LogoutClientIDQueryParameter     string            `mapstructure:"logout_client_id_query_parameter"`
+	AdditionalScopeClaims            []string          `mapstructure:"additional_scope_claims"`
+	PostLoginRedirectURL             string            `mapstructure:"post_login_redirect_url"`
+}
+
+func (p *OIDCProvider) IsConfigured() bool {
+	return p != nil
+}
+
 type OIDC struct {
 	// configure how users are handled on the lakeFS side:
 	ValidateIDTokenClaims  map[string]string `mapstructure:"validate_id_token_claims"`
 	DefaultInitialGroups   []string          `mapstructure:"default_initial_groups"`
 	InitialGroupsClaimName string            `mapstructure:"initial_groups_claim_name"`
 	FriendlyNameClaimName  string            `mapstructure:"friendly_name_claim_name"`
+	EmailClaimName         string            `mapstructure:"email_claim_name"`
 	PersistFriendlyName    bool              `mapstructure:"persist_friendly_name"`
 }
 
@@ -883,7 +927,28 @@ func (a *Auth) GetAuthUIConfig() *AuthUIConfig {
 }
 
 func (a *Auth) GetLoginURLMethodConfigParam() string {
-	return "none"
+	if a.LoginURL == "" {
+		return "none"
+	}
+	if a.LoginURLMethod == "" {
+		return AuthLoginURLMethodRedirect
+	}
+	return a.LoginURLMethod
+}
+
+func (a *Auth) Validate() error {
+	if a.IsAuthenticationTypeAPI() && a.Providers.OIDC.IsConfigured() {
+		return fmt.Errorf("%w: auth.authentication_api and auth.providers.oidc are mutually exclusive", ErrBadConfiguration)
+	}
+	switch a.LoginURLMethod {
+	case "", AuthLoginURLMethodRedirect, AuthLoginURLMethodSelect:
+		if a.Providers.OIDC != nil {
+			return a.Providers.OIDC.Validate()
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: auth.ui_config.login_url_method must be %q or %q", ErrBadConfiguration, AuthLoginURLMethodRedirect, AuthLoginURLMethodSelect)
+	}
 }
 
 // UseUILoginPlaceholders returns true if the UI should use placeholders for login
@@ -916,6 +981,14 @@ func (u *AuthUIConfig) IsAuthUISimplified() bool {
 
 func (u *AuthUIConfig) IsAdvancedAuth() bool {
 	return u.RBAC == AuthRBACExternal || u.RBAC == AuthRBACInternal
+}
+
+func (u *AuthUIConfig) UsesLocalRBAC(localRBAC bool) bool {
+	return u.RBAC == AuthRBACInternal && localRBAC
+}
+
+func (u *AuthUIConfig) UsesExternalRBAC(localRBAC bool) bool {
+	return u.RBAC == AuthRBACExternal || (u.RBAC == AuthRBACInternal && !localRBAC)
 }
 
 type UI struct {

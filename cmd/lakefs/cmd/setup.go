@@ -43,7 +43,7 @@ var setupCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		if authConfig.GetAuthUIConfig().RBAC == config.AuthRBACExternal {
+		if authConfig.GetAuthUIConfig().UsesExternalRBAC(baseConfig.Features.LocalRBAC) {
 			// nothing to do - users are managed elsewhere
 			return
 		}

@@ -792,9 +792,14 @@ func (c *Controller) Login(w http.ResponseWriter, r *http.Request, body apigen.L
 		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return
 	}
-	internalAuthSession, _ := c.sessionStore.Get(r, auth.InternalAuthSessionName)
+	internalAuthSession, err := auth.SessionForReplacement(c.sessionStore, r, auth.InternalAuthSessionName)
+	if err != nil {
+		c.Logger.WithError(err).Error("Failed to decode internal auth session")
+		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
+		return
+	}
 	internalAuthSession.Values[auth.TokenSessionKeyName] = tokenString
-	err = c.sessionStore.Save(r, w, internalAuthSession)
+	err = auth.SaveSession(r, w, internalAuthSession)
 	if err != nil {
 		c.Logger.WithError(err).Error("Failed to save internal auth session")
 		writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
@@ -5496,14 +5501,16 @@ func (c *Controller) GetTag(w http.ResponseWriter, r *http.Request, repository, 
 
 func newLoginConfig(c config.AuthConfig) *apigen.LoginConfig {
 	authUICfg := c.GetAuthUIConfig()
+	loginURL := authUICfg.LoginURL
+	loginURLMethod := c.GetLoginURLMethodConfigParam()
 	loginConfig := &apigen.LoginConfig{
 		RBAC:               apiutil.Ptr(authUICfg.RBAC),
-		LoginUrl:           authUICfg.LoginURL,
-		LoginUrlMethod:     apiutil.Ptr(c.GetLoginURLMethodConfigParam()),
+		LoginUrl:           loginURL,
+		LoginUrlMethod:     apiutil.Ptr(loginURLMethod),
 		LoginFailedMessage: apiutil.Ptr(authUICfg.LoginFailedMessage),
 		FallbackLoginUrl:   authUICfg.FallbackLoginURL,
 		FallbackLoginLabel: authUICfg.FallbackLoginLabel,
-		LoginCookieNames:   authUICfg.LoginCookieNames,
+		LoginCookieNames:   append([]string(nil), authUICfg.LoginCookieNames...),
 		LogoutUrl:          authUICfg.LogoutURL,
 	}
 	if c.UseUILoginPlaceholders() {
@@ -5517,7 +5524,7 @@ func (c *Controller) GetSetupState(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// external auth reports as initialized to avoid triggering the setup wizard
-	if c.Config.AuthConfig().GetAuthUIConfig().RBAC == config.AuthRBACExternal {
+	if c.Config.AuthConfig().GetAuthUIConfig().UsesExternalRBAC(c.Config.GetBaseConfig().Features.LocalRBAC) {
 		response := apigen.SetupState{
 			State:            swag.String(string(auth.SetupStateInitialized)),
 			LoginConfig:      newLoginConfig(c.Config.AuthConfig()),
@@ -5622,7 +5629,7 @@ func (c *Controller) Setup(w http.ResponseWriter, r *http.Request, body apigen.S
 		return
 	}
 
-	if c.Config.AuthConfig().GetAuthUIConfig().RBAC == config.AuthRBACExternal {
+	if c.Config.AuthConfig().GetAuthUIConfig().UsesExternalRBAC(c.Config.GetBaseConfig().Features.LocalRBAC) {
 		// nothing to do - users are managed elsewhere
 		writeResponse(w, r, http.StatusOK, apigen.CredentialsWithSecret{})
 		return

@@ -10,16 +10,20 @@ import (
 	"github.com/treeverse/lakefs/pkg/logging"
 )
 
-func NewAuthenticationService(_ context.Context, c config.Config, logger logging.Logger) (Service, error) {
+func NewAuthenticationService(ctx context.Context, c config.Config, authService auth.Service, externalIdentityProvisioner *auth.ExternalIdentityProvisioner, logger logging.Logger) (Service, error) {
 	baseAuthCfg := c.AuthConfig().GetBaseAuthConfig()
 	if baseAuthCfg.IsAuthenticationTypeAPI() {
 		return NewAPIService(
 			baseAuthCfg.AuthenticationAPI.Endpoint,
 			baseAuthCfg.CookieAuthVerification.ValidateIDTokenClaims,
 			logger.WithField("service", "authentication_api"),
-			baseAuthCfg.AuthenticationAPI.ExternalPrincipalsEnabled)
+			baseAuthCfg.AuthenticationAPI.ExternalPrincipalsEnabled,
+			baseAuthCfg.LogoutRedirectURL)
 	}
-	return NewDummyService(), nil
+	if baseAuthCfg.Providers.OIDC.IsConfigured() {
+		return NewOIDCService(ctx, externalIdentityProvisioner, *baseAuthCfg.Providers.OIDC, baseAuthCfg.OIDC, baseAuthCfg.LoginDuration, baseAuthCfg.LogoutRedirectURL, logger)
+	}
+	return NewDummyService(baseAuthCfg.LogoutRedirectURL), nil
 }
 
 func BuildAuthenticatorChain(c config.Config, logger logging.Logger, authService auth.Service) (auth.ChainAuthenticator, error) {
