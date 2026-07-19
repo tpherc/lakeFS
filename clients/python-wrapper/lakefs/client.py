@@ -68,6 +68,8 @@ class ServerConfiguration:
         """
         Returns the lakeFS server storage configuration by ID
         """
+        if storage_id == SINGLE_STORAGE_ID and len(self._storage_conf) == 1:
+            return next(iter(self._storage_conf.values()))
         return self._storage_conf[storage_id]
 
 class Client:

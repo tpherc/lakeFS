@@ -1,4 +1,5 @@
 import lakefs_sdk
+import pytest
 
 from lakefs.exceptions import NoAuthenticationFound
 from tests.utests.common import (
@@ -39,6 +40,8 @@ class TestClient:
         clt = Client(**TEST_CONFIG_KWARGS)
 
         assert clt.storage_config_by_id("alpha").blockstore_type == "s3"
+        assert clt.storage_config.blockstore_type == "s3"
+        assert clt.storage_config_by_id().blockstore_type == "s3"
 
     def test_client_storage_config_prefers_multi_entry_list(self, monkeypatch):
         alpha = lakefs_sdk.StorageConfig(
@@ -69,6 +72,10 @@ class TestClient:
 
         assert clt.storage_config_by_id("alpha").blockstore_type == "s3"
         assert clt.storage_config_by_id("beta").blockstore_type == "azure"
+        with pytest.raises(KeyError):
+            clt.storage_config_by_id()
+        with pytest.raises(KeyError):
+            clt.storage_config
 
     def test_client_no_config(self, monkeypatch):
         with lakectl_no_config_context(monkeypatch) as client:
