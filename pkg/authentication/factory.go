@@ -7,10 +7,11 @@ import (
 	"github.com/treeverse/lakefs/pkg/auth"
 	authremote "github.com/treeverse/lakefs/pkg/auth/remoteauthenticator"
 	"github.com/treeverse/lakefs/pkg/config"
+	"github.com/treeverse/lakefs/pkg/kv"
 	"github.com/treeverse/lakefs/pkg/logging"
 )
 
-func NewAuthenticationService(ctx context.Context, c config.Config, authService auth.Service, logger logging.Logger) (Service, error) {
+func NewAuthenticationService(ctx context.Context, c config.Config, authService auth.Service, kvStore kv.Store, logger logging.Logger) (Service, error) {
 	baseAuthCfg := c.AuthConfig().GetBaseAuthConfig()
 	if baseAuthCfg.IsAuthenticationTypeAPI() {
 		return NewAPIService(
@@ -21,7 +22,12 @@ func NewAuthenticationService(ctx context.Context, c config.Config, authService 
 			baseAuthCfg.LogoutRedirectURL)
 	}
 	if baseAuthCfg.Providers.OIDC.IsConfigured() {
-		return NewOIDCService(ctx, authService, *baseAuthCfg.Providers.OIDC, baseAuthCfg.OIDC, baseAuthCfg.LoginDuration, baseAuthCfg.LogoutRedirectURL, logger)
+		provisioner := auth.NewExternalIdentityProvisioner(
+			authService,
+			kvStore,
+			logger.WithField("service", "external_identity_provisioner"),
+		)
+		return NewOIDCService(ctx, provisioner, *baseAuthCfg.Providers.OIDC, baseAuthCfg.OIDC, baseAuthCfg.LoginDuration, baseAuthCfg.LogoutRedirectURL, logger)
 	}
 	return NewDummyService(baseAuthCfg.LogoutRedirectURL), nil
 }

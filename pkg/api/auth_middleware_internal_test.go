@@ -18,6 +18,7 @@ import (
 	"github.com/treeverse/lakefs/pkg/auth/crypt"
 	"github.com/treeverse/lakefs/pkg/auth/model"
 	oidcencoding "github.com/treeverse/lakefs/pkg/auth/oidc/encoding"
+	"github.com/treeverse/lakefs/pkg/kv/kvtest"
 	"github.com/treeverse/lakefs/pkg/logging"
 )
 
@@ -75,7 +76,7 @@ func TestCheckSecurityRequirementsContinuesPastCorruptCookieSessions(t *testing.
 				authService = newOIDCMiddlewareAuthService(tt.expectedUser)
 			}
 
-			user, err := checkSecurityRequirements(rec, req, tt.requirements, logging.Dummy(), nil, authService, store, tt.oidcConfig, tt.cookieAuthConfig)
+			user, err := checkSecurityRequirements(rec, req, tt.requirements, logging.Dummy(), nil, authService, newMiddlewareProvisioner(t, authService), store, tt.oidcConfig, tt.cookieAuthConfig)
 
 			require.NoError(t, err)
 			require.Equal(t, tt.expectedUser, user.Username)
@@ -90,7 +91,8 @@ func TestCheckSecurityRequirementsReturnsRememberedCookieFailure(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: auth.InternalAuthSessionName, Value: "corrupt"})
 	rec := httptest.NewRecorder()
 
-	user, err := checkSecurityRequirements(rec, req, authSecurityRequirements("cookie_auth", "oidc_auth"), logging.Dummy(), nil, newMiddlewareAuthService(), store, &auth.OIDCConfig{}, nil)
+	authService := newMiddlewareAuthService()
+	user, err := checkSecurityRequirements(rec, req, authSecurityRequirements("cookie_auth", "oidc_auth"), logging.Dummy(), nil, authService, newMiddlewareProvisioner(t, authService), store, &auth.OIDCConfig{}, nil)
 
 	require.Nil(t, user)
 	require.Error(t, err)
@@ -103,7 +105,8 @@ func TestCheckSecurityRequirementsReturnsStoreErrorsImmediately(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/repositories", nil)
 	rec := httptest.NewRecorder()
 
-	user, err := checkSecurityRequirements(rec, req, authSecurityRequirements("cookie_auth", "oidc_auth"), logging.Dummy(), nil, newOIDCMiddlewareAuthService("oidc-user"), store, &auth.OIDCConfig{}, nil)
+	authService := newOIDCMiddlewareAuthService("oidc-user")
+	user, err := checkSecurityRequirements(rec, req, authSecurityRequirements("cookie_auth", "oidc_auth"), logging.Dummy(), nil, authService, newMiddlewareProvisioner(t, authService), store, &auth.OIDCConfig{}, nil)
 
 	require.Nil(t, user)
 	require.ErrorIs(t, err, storeErr)
@@ -117,7 +120,8 @@ func TestCheckSecurityRequirementsRejectsHistoricalOIDCSession(t *testing.T) {
 	req.AddCookie(oidcSessionCookie(t, store, "oidc-user", false))
 	rec := httptest.NewRecorder()
 
-	user, err := checkSecurityRequirements(rec, req, authSecurityRequirements("oidc_auth"), logging.Dummy(), nil, newOIDCMiddlewareAuthService("oidc-user"), store, &auth.OIDCConfig{}, nil)
+	authService := newOIDCMiddlewareAuthService("oidc-user")
+	user, err := checkSecurityRequirements(rec, req, authSecurityRequirements("oidc_auth"), logging.Dummy(), nil, authService, newMiddlewareProvisioner(t, authService), store, &auth.OIDCConfig{}, nil)
 
 	require.Nil(t, user)
 	require.ErrorIs(t, err, auth.ErrAuthenticatingRequest)
@@ -130,7 +134,8 @@ func TestCheckSecurityRequirementsRejectsExpiredOIDCSession(t *testing.T) {
 	req.AddCookie(oidcSessionCookieWithExpiry(t, store, "oidc-user", time.Now().Add(-time.Second)))
 	rec := httptest.NewRecorder()
 
-	user, err := checkSecurityRequirements(rec, req, authSecurityRequirements("oidc_auth"), logging.Dummy(), nil, newOIDCMiddlewareAuthService("oidc-user"), store, &auth.OIDCConfig{}, nil)
+	authService := newOIDCMiddlewareAuthService("oidc-user")
+	user, err := checkSecurityRequirements(rec, req, authSecurityRequirements("oidc_auth"), logging.Dummy(), nil, authService, newMiddlewareProvisioner(t, authService), store, &auth.OIDCConfig{}, nil)
 
 	require.Nil(t, user)
 	require.ErrorIs(t, err, auth.ErrAuthenticatingRequest)
@@ -265,6 +270,15 @@ func newOIDCMiddlewareAuthService(username string) *middlewareAuthService {
 	service.usersByExternalID[externalID] = user
 	service.usersByUsername[username] = user
 	return service
+}
+
+func newMiddlewareProvisioner(t *testing.T, authService auth.Service) *auth.ExternalIdentityProvisioner {
+	t.Helper()
+	return auth.NewExternalIdentityProvisioner(
+		authService,
+		kvtest.GetStore(t.Context(), t),
+		logging.Dummy(),
+	)
 }
 
 func (s *middlewareAuthService) SecretStore() crypt.SecretStore {

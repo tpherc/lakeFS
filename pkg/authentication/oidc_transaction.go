@@ -123,7 +123,14 @@ func (s *oidcSession) SaveClaims(claims encoding.Claims, expiresAt time.Time) er
 	if len(data) > oidcClaimsMaxJSONSize {
 		return fmt.Errorf("%w: normalized OIDC claims exceed %d bytes", ErrInvalidRequest, oidcClaimsMaxJSONSize)
 	}
-	s.session.Values[auth.IDTokenClaimsSessionKey] = string(data)
+	return s.SaveClaimsJSON(string(data), expiresAt)
+}
+
+func (s *oidcSession) SaveClaimsJSON(claimsJSON string, expiresAt time.Time) error {
+	if len(claimsJSON) > oidcClaimsMaxJSONSize {
+		return fmt.Errorf("%w: normalized OIDC claims exceed %d bytes", ErrInvalidRequest, oidcClaimsMaxJSONSize)
+	}
+	s.session.Values[auth.IDTokenClaimsSessionKey] = claimsJSON
 	auth.MarkOIDCSessionClaimsCurrent(s.session, expiresAt)
 	clearOIDCTransactionValue(s.session)
 	return s.Save()

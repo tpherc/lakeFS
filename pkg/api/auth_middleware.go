@@ -28,7 +28,7 @@ func extractSecurityRequirements(router routers.Router, r *http.Request) (openap
 	return *route.Operation.Security, nil
 }
 
-func GenericAuthMiddleware(logger logging.Logger, authenticator auth.Authenticator, authService auth.Service, oidcConfig *auth.OIDCConfig, cookieAuthConfig *auth.CookieAuthConfig, secureCookies bool) (func(next http.Handler) http.Handler, error) {
+func GenericAuthMiddleware(logger logging.Logger, authenticator auth.Authenticator, authService auth.Service, externalIdentityProvisioner *auth.ExternalIdentityProvisioner, oidcConfig *auth.OIDCConfig, cookieAuthConfig *auth.CookieAuthConfig, secureCookies bool) (func(next http.Handler) http.Handler, error) {
 	swagger, err := apigen.GetSwagger()
 	if err != nil {
 		return nil, err
@@ -42,7 +42,7 @@ func GenericAuthMiddleware(logger logging.Logger, authenticator auth.Authenticat
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			user, err := checkSecurityRequirements(w, r, swagger.Security, logger, authenticator, authService, sessionStore, oidcConfig, cookieAuthConfig)
+			user, err := checkSecurityRequirements(w, r, swagger.Security, logger, authenticator, authService, externalIdentityProvisioner, sessionStore, oidcConfig, cookieAuthConfig)
 			if err != nil {
 				writeAuthError(w, r, err, http.StatusUnauthorized, ErrAuthenticatingRequest.Error())
 				return
@@ -56,7 +56,7 @@ func GenericAuthMiddleware(logger logging.Logger, authenticator auth.Authenticat
 	}, nil
 }
 
-func AuthMiddleware(logger logging.Logger, swagger *openapi3.T, authenticator auth.Authenticator, authService auth.Service, sessionStore sessions.Store, oidcConfig *auth.OIDCConfig, cookieAuthConfig *auth.CookieAuthConfig) func(next http.Handler) http.Handler {
+func AuthMiddleware(logger logging.Logger, swagger *openapi3.T, authenticator auth.Authenticator, authService auth.Service, externalIdentityProvisioner *auth.ExternalIdentityProvisioner, sessionStore sessions.Store, oidcConfig *auth.OIDCConfig, cookieAuthConfig *auth.CookieAuthConfig) func(next http.Handler) http.Handler {
 	router, err := legacy.NewRouter(swagger)
 	if err != nil {
 		panic(err)
@@ -73,7 +73,7 @@ func AuthMiddleware(logger logging.Logger, swagger *openapi3.T, authenticator au
 				writeAuthError(w, r, err, http.StatusBadRequest, err.Error())
 				return
 			}
-			user, err := checkSecurityRequirements(w, r, securityRequirements, logger, authenticator, authService, sessionStore, oidcConfig, cookieAuthConfig)
+			user, err := checkSecurityRequirements(w, r, securityRequirements, logger, authenticator, authService, externalIdentityProvisioner, sessionStore, oidcConfig, cookieAuthConfig)
 			if err != nil {
 				writeAuthError(w, r, err, http.StatusUnauthorized, ErrAuthenticatingRequest.Error())
 				return
@@ -96,6 +96,7 @@ func checkSecurityRequirements(w http.ResponseWriter,
 	logger logging.Logger,
 	authenticator auth.Authenticator,
 	authService auth.Service,
+	externalIdentityProvisioner *auth.ExternalIdentityProvisioner,
 	sessionStore sessions.Store,
 	oidcConfig *auth.OIDCConfig,
 	cookieAuthConfig *auth.CookieAuthConfig,
@@ -188,7 +189,7 @@ func checkSecurityRequirements(w http.ResponseWriter,
 				if recovered {
 					continue
 				}
-				user, err = auth.UserFromOIDCSession(ctx, logger, authService, oidcSession, oidcConfig)
+				user, err = auth.UserFromOIDCSession(ctx, logger, externalIdentityProvisioner, oidcSession, oidcConfig)
 			case "saml_auth":
 				samlSession, getErr := sessionStore.Get(r, auth.SAMLAuthSessionName)
 				recovered, handleErr := handleSessionGetErr(auth.SAMLAuthSessionName, getErr)
@@ -198,7 +199,7 @@ func checkSecurityRequirements(w http.ResponseWriter,
 				if recovered {
 					continue
 				}
-				user, err = auth.UserFromSAMLSession(ctx, logger, authService, samlSession, cookieAuthConfig)
+				user, err = auth.UserFromSAMLSession(ctx, logger, externalIdentityProvisioner, samlSession, cookieAuthConfig)
 				if err == nil && user != nil && auth.SessionNeedsEncodingUpgrade(samlSession) {
 					err = auth.SaveSession(r, w, samlSession)
 				}

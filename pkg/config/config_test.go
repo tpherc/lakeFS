@@ -326,6 +326,83 @@ func TestOIDCProviderValidatePartialProviderBlocks(t *testing.T) {
 	}
 }
 
+func TestOIDCProviderBlockPresenceFromYAML(t *testing.T) {
+	tests := []struct {
+		name        string
+		oidcBlock   string
+		wantPresent bool
+		wantErr     string
+	}{
+		{
+			name:        "absent block leaves OIDC disabled",
+			wantPresent: false,
+		},
+		{
+			name:        "empty block fails required fields",
+			oidcBlock:   "      oidc: {}\n",
+			wantPresent: true,
+			wantErr:     "auth.providers.oidc.url is required",
+		},
+		{
+			name: "optional-only block fails required fields",
+			oidcBlock: `      oidc:
+        additional_scope_claims:
+          - email
+`,
+			wantPresent: true,
+			wantErr:     "auth.providers.oidc.url is required",
+		},
+		{
+			name: "complete block enables OIDC",
+			oidcBlock: `      oidc:
+        url: https://idp.example
+        client_id: lakefs
+        client_secret: secret
+        callback_base_url: https://lakefs.example
+`,
+			wantPresent: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			viper.SetConfigType("yaml")
+			require.NoError(t, viper.ReadConfig(strings.NewReader(baseConfigYAMLWithOIDCProvider(tt.oidcBlock))))
+			cfg := &config.ConfigImpl{}
+			_, err := config.NewConfig("", cfg)
+			require.NoError(t, err)
+			err = cfg.Validate()
+			if tt.wantErr != "" {
+				require.ErrorIs(t, err, config.ErrBadConfiguration)
+				require.Contains(t, err.Error(), tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tt.wantPresent, cfg.Auth.Providers.OIDC != nil)
+		})
+	}
+}
+
+func baseConfigYAMLWithOIDCProvider(oidcBlock string) string {
+	providersBlock := ""
+	if oidcBlock != "" {
+		providersBlock = "  providers:\n" + oidcBlock
+	}
+	return `auth:
+  encrypt:
+    secret_key: "required in config"
+` + providersBlock + `
+database:
+  type: local
+
+blockstore:
+  type: local
+  local:
+    path: /tmp
+`
+}
+
 func TestOIDCProviderValidateMalformedLogoutParameters(t *testing.T) {
 	tests := []struct {
 		name string

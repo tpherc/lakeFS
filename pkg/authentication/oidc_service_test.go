@@ -16,6 +16,7 @@ import (
 	"github.com/treeverse/lakefs/pkg/auth/model"
 	"github.com/treeverse/lakefs/pkg/auth/oidc/encoding"
 	"github.com/treeverse/lakefs/pkg/config"
+	"github.com/treeverse/lakefs/pkg/kv/kvtest"
 	"github.com/treeverse/lakefs/pkg/logging"
 )
 
@@ -48,7 +49,7 @@ func TestOIDCLoginUsesProtocolClientAndSavesTransaction(t *testing.T) {
 			return sampleOIDCTransaction(input.CallbackURL, input.Next), "https://idp.example/authorize?state=state-1", nil
 		},
 	}
-	service := testOIDCService(fakeClient, config.OIDC{})
+	service := testOIDCService(t, fakeClient, config.OIDC{})
 
 	req := httptest.NewRequest(http.MethodGet, "https://lakefs.example/oidc/login?next=/repositories", nil)
 	rec := httptest.NewRecorder()
@@ -81,7 +82,7 @@ func TestOIDCLoginStopsWhenExistingSessionCleanupFails(t *testing.T) {
 		},
 	}
 	fakeClient := &fakeOIDCClient{}
-	service := testOIDCService(fakeClient, config.OIDC{})
+	service := testOIDCService(t, fakeClient, config.OIDC{})
 
 	req := httptest.NewRequest(http.MethodGet, "https://lakefs.example/oidc/login?next=/repositories", nil)
 	rec := httptest.NewRecorder()
@@ -116,7 +117,7 @@ func TestOIDCCallbackConsumesTransactionBeforeExchangeAndStoresNormalizedClaims(
 		},
 	}
 	authService := newOIDCCallbackAuthService()
-	service := testOIDCServiceWithAuth(fakeClient, config.OIDC{
+	service := testOIDCServiceWithAuth(t, fakeClient, config.OIDC{
 		FriendlyNameClaimName:  "name",
 		EmailClaimName:         "email",
 		InitialGroupsClaimName: "groups",
@@ -189,7 +190,7 @@ func TestOIDCCallbackRequiredClaimMismatchDoesNotSaveSessionOrProvisionUser(t *t
 			}, nil
 		},
 	}
-	service := testOIDCServiceWithAuth(fakeClient, config.OIDC{
+	service := testOIDCServiceWithAuth(t, fakeClient, config.OIDC{
 		ValidateIDTokenClaims: map[string]string{"department": "Data"},
 	}, authService)
 
@@ -237,7 +238,7 @@ func TestOIDCCallbackExistingUserIgnoresLargeCreationOnlyGroupClaim(t *testing.T
 			}, nil
 		},
 	}
-	service := testOIDCServiceWithAuth(fakeClient, config.OIDC{
+	service := testOIDCServiceWithAuth(t, fakeClient, config.OIDC{
 		FriendlyNameClaimName:  "name",
 		InitialGroupsClaimName: "groups",
 		PersistFriendlyName:    true,
@@ -270,6 +271,56 @@ func TestOIDCCallbackExistingUserIgnoresLargeCreationOnlyGroupClaim(t *testing.T
 	require.Equal(t, "Alice", claims["name"])
 }
 
+func TestOIDCCallbackOversizedRetainedClaimDoesNotMutateUser(t *testing.T) {
+	store := testSessionStore(t)
+	transaction := sampleOIDCTransaction("https://lakefs.example/api/v1/oidc/callback", "/repositories")
+	loginReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/oidc/login", nil)
+	loginRec := httptest.NewRecorder()
+	require.NoError(t, (oidcSessionStore{store: store}).SaveTransaction(loginRec, loginReq, transaction))
+
+	externalID := oidcExternalIDForTest("https://idp.example", "alice")
+	authService := newOIDCCallbackAuthService(&model.User{
+		Username:     "alice",
+		ExternalID:   stringPtr(externalID),
+		Source:       "oidc",
+		FriendlyName: stringPtr("Old Name"),
+	})
+	fakeClient := &fakeOIDCClient{
+		exchangeFunc: func(_ context.Context, _ *oidcTransaction, _ oidcCallbackInput) (encoding.Claims, error) {
+			return encoding.Claims{
+				"iss":  "https://idp.example",
+				"sub":  "alice",
+				"name": strings.Repeat("x", oidcClaimsMaxJSONSize*2),
+			}, nil
+		},
+	}
+	service := testOIDCServiceWithAuth(t, fakeClient, config.OIDC{
+		FriendlyNameClaimName: "name",
+		PersistFriendlyName:   true,
+	}, authService)
+
+	callbackReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/api/v1/oidc/callback?state=state-1&code=code-1", nil)
+	for _, cookie := range latestCookies(loginRec.Result()) {
+		callbackReq.AddCookie(cookie)
+	}
+	callbackRec := httptest.NewRecorder()
+
+	service.OauthCallback(callbackRec, callbackReq, store)
+	require.Equal(t, http.StatusFound, callbackRec.Code)
+	require.Equal(t, "/auth/login", callbackRec.Header().Get("Location"))
+	require.Empty(t, authService.createdUsers)
+	require.Empty(t, authService.friendlyNameUpdates)
+
+	afterReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/repositories", nil)
+	for _, cookie := range latestCookies(callbackRec.Result()) {
+		afterReq.AddCookie(cookie)
+	}
+	oidcSession, err := (oidcSessionStore{store: store}).Load(httptest.NewRecorder(), afterReq)
+	require.NoError(t, err)
+	_, hasClaims := oidcSession.session.Values[auth.IDTokenClaimsSessionKey]
+	require.False(t, hasClaims)
+}
+
 func TestOIDCCallbackWrongStateClearsTransaction(t *testing.T) {
 	store := testSessionStore(t)
 	transaction := sampleOIDCTransaction("https://lakefs.example/api/v1/oidc/callback", "/repositories")
@@ -277,7 +328,7 @@ func TestOIDCCallbackWrongStateClearsTransaction(t *testing.T) {
 	loginRec := httptest.NewRecorder()
 	require.NoError(t, (oidcSessionStore{store: store}).SaveTransaction(loginRec, loginReq, transaction))
 
-	service := testOIDCService(&fakeOIDCClient{}, config.OIDC{})
+	service := testOIDCService(t, &fakeOIDCClient{}, config.OIDC{})
 	callbackReq := httptest.NewRequest(http.MethodGet, "https://lakefs.example/api/v1/oidc/callback?state=wrong&code=code-1", nil)
 	for _, cookie := range latestCookies(loginRec.Result()) {
 		callbackReq.AddCookie(cookie)
@@ -314,11 +365,13 @@ func TestNewOIDCServiceRejectsInvalidLogoutURLBeforeProviderInitialization(t *te
 	require.Nil(t, service)
 }
 
-func testOIDCService(client oidcProtocolClient, claimsConfig config.OIDC) *OIDCService {
-	return testOIDCServiceWithAuth(client, claimsConfig, newOIDCCallbackAuthService())
+func testOIDCService(t *testing.T, client oidcProtocolClient, claimsConfig config.OIDC) *OIDCService {
+	t.Helper()
+	return testOIDCServiceWithAuth(t, client, claimsConfig, newOIDCCallbackAuthService())
 }
 
-func testOIDCServiceWithAuth(client oidcProtocolClient, claimsConfig config.OIDC, authService auth.Service) *OIDCService {
+func testOIDCServiceWithAuth(t *testing.T, client oidcProtocolClient, claimsConfig config.OIDC, authService auth.Service) *OIDCService {
+	t.Helper()
 	callbacks, err := newOIDCCallbackResolver(config.OIDCProvider{CallbackBaseURL: "https://lakefs.example"})
 	if err != nil {
 		panic(err)
@@ -326,13 +379,22 @@ func testOIDCServiceWithAuth(client oidcProtocolClient, claimsConfig config.OIDC
 	return &OIDCService{
 		oidc:                 client,
 		callbacks:            callbacks,
-		authService:          authService,
+		provisioner:          newOIDCProvisionerForTest(t, authService),
 		userClaimsConfig:     claimsConfig,
 		sessionDuration:      time.Hour,
 		logger:               logging.ContextUnavailable(),
 		postLoginRedirectURL: "",
 		logoutRedirectURL:    "/auth/login",
 	}
+}
+
+func newOIDCProvisionerForTest(t *testing.T, authService auth.Service) *auth.ExternalIdentityProvisioner {
+	t.Helper()
+	return auth.NewExternalIdentityProvisioner(
+		authService,
+		kvtest.GetStore(t.Context(), t),
+		logging.ContextUnavailable(),
+	)
 }
 
 func testSessionStore(t *testing.T) *sessions.CookieStore {
@@ -415,6 +477,9 @@ func (s *oidcCallbackAuthService) CreateUser(_ context.Context, user *model.User
 	copied := cloneUser(user)
 	s.createdUsers = append(s.createdUsers, copied)
 	if copied.ExternalID != nil {
+		if _, ok := s.usersByExternalID[*copied.ExternalID]; ok {
+			return "", auth.ErrAlreadyExists
+		}
 		s.usersByExternalID[*copied.ExternalID] = cloneUser(copied)
 	}
 	return user.Username, nil

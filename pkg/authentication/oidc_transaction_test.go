@@ -14,6 +14,7 @@ import (
 	"github.com/treeverse/lakefs/pkg/auth"
 	"github.com/treeverse/lakefs/pkg/auth/model"
 	"github.com/treeverse/lakefs/pkg/auth/oidc/encoding"
+	"github.com/treeverse/lakefs/pkg/kv/kvtest"
 	"github.com/treeverse/lakefs/pkg/logging"
 )
 
@@ -128,14 +129,21 @@ func TestOIDCSessionSaveClaimsWritesCurrentAuthSchema(t *testing.T) {
 	require.Equal(t, expiresAt.Unix(), loadedExpiresAt)
 
 	externalID := oidcExternalIDForTest("https://issuer.example", "alice")
-	user, err := auth.UserFromOIDCSession(t.Context(), logging.Dummy(), &oidcRequestAuthService{
+	authService := &oidcRequestAuthService{
 		user: &model.User{
 			CreatedAt:  time.Now().UTC(),
 			Username:   "alice",
 			ExternalID: &externalID,
 			Source:     "oidc",
 		},
-	}, loadedSession, &auth.OIDCConfig{})
+	}
+	user, err := auth.UserFromOIDCSession(
+		t.Context(),
+		logging.Dummy(),
+		auth.NewExternalIdentityProvisioner(authService, kvtest.GetStore(t.Context(), t), logging.Dummy()),
+		loadedSession,
+		&auth.OIDCConfig{},
+	)
 	require.NoError(t, err)
 	require.Equal(t, "alice", user.Username)
 }

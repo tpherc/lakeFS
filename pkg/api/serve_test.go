@@ -174,6 +174,7 @@ func setupHandler(t testing.TB) (http.Handler, *dependencies) {
 		c,
 		authenticator,
 		authService,
+		auth.NewExternalIdentityProvisioner(authService, kvStore, logger),
 		authenticationService,
 		c.BlockAdapter,
 		meta,

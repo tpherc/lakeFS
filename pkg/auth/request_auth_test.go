@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/treeverse/lakefs/pkg/auth/model"
 	oidcencoding "github.com/treeverse/lakefs/pkg/auth/oidc/encoding"
+	"github.com/treeverse/lakefs/pkg/kv/kvtest"
 	"github.com/treeverse/lakefs/pkg/logging"
 )
 
@@ -147,6 +149,21 @@ func newOIDCSessionAuthService(users ...*model.User) *oidcSessionAuthService {
 	return s
 }
 
+func newOIDCSessionProvisionerForTest(t *testing.T, authService *oidcSessionAuthService) *ExternalIdentityProvisioner {
+	t.Helper()
+	provisioner := NewExternalIdentityProvisioner(
+		authService,
+		kvtest.GetStore(t.Context(), t),
+		logging.ContextUnavailable(),
+	)
+	var ownerSeq int
+	provisioner.ownerToken = func() (string, error) {
+		ownerSeq++
+		return fmt.Sprintf("owner-%d", ownerSeq), nil
+	}
+	return provisioner
+}
+
 func (s *oidcSessionAuthService) GetUserByExternalID(_ context.Context, externalID string) (*model.User, error) {
 	if s.getUserByExternalErr != nil {
 		return nil, s.getUserByExternalErr
@@ -165,6 +182,9 @@ func (s *oidcSessionAuthService) CreateUser(_ context.Context, user *model.User)
 	copied := cloneUser(user)
 	s.createdUsers = append(s.createdUsers, copied)
 	if copied.ExternalID != nil {
+		if _, ok := s.usersByExternalID[*copied.ExternalID]; ok {
+			return "", ErrAlreadyExists
+		}
 		s.usersByExternalID[*copied.ExternalID] = cloneUser(copied)
 	}
 	return user.Username, nil
@@ -198,8 +218,9 @@ func (s *oidcSessionAuthService) UpdateUserFriendlyName(_ context.Context, usern
 
 func TestResolveOrProvisionOIDCUserFromClaimsCreatesUserAndAssignsInitialGroups(t *testing.T) {
 	authService := newOIDCSessionAuthService()
+	provisioner := newOIDCSessionProvisionerForTest(t, authService)
 	externalID := oidcExternalID("https://issuer.example", "alice/opaque")
-	user, err := ResolveOrProvisionOIDCUserFromClaims(t.Context(), logging.ContextUnavailable(), authService, oidcencoding.Claims{
+	user, err := ResolveOrProvisionOIDCUserFromClaims(t.Context(), logging.ContextUnavailable(), provisioner, oidcencoding.Claims{
 		"iss":        "https://issuer.example",
 		"sub":        "alice/opaque",
 		"name":       "Alice Example",
@@ -243,6 +264,7 @@ func TestUserFromOIDCSessionExistingUserUpdatesFriendlyNameWithoutInitialGroupCh
 		FriendlyName: stringPtr("Old Name"),
 		Source:       "oidc",
 	})
+	provisioner := newOIDCSessionProvisionerForTest(t, authService)
 	session := &sessions.Session{Values: map[interface{}]interface{}{
 		IDTokenClaimsSessionKey: `{
 			"iss": "https://issuer.example",
@@ -253,7 +275,7 @@ func TestUserFromOIDCSessionExistingUserUpdatesFriendlyNameWithoutInitialGroupCh
 	}}
 	MarkOIDCSessionClaimsCurrent(session, time.Now().Add(time.Hour))
 
-	user, err := UserFromOIDCSession(t.Context(), logging.ContextUnavailable(), authService, session, &OIDCConfig{
+	user, err := UserFromOIDCSession(t.Context(), logging.ContextUnavailable(), provisioner, session, &OIDCConfig{
 		DefaultInitialGroups:   []string{"Developers"},
 		InitialGroupsClaimName: "roles",
 		FriendlyNameClaimName:  "name",
@@ -275,6 +297,7 @@ func TestUserFromOIDCSessionDoesNotProvisionOrUseRawSubjectExternalID(t *testing
 		FriendlyName: stringPtr("Old Name"),
 		Source:       "oidc",
 	})
+	provisioner := newOIDCSessionProvisionerForTest(t, authService)
 	session := &sessions.Session{Values: map[interface{}]interface{}{
 		IDTokenClaimsSessionKey: `{
 			"iss": "https://issuer.example",
@@ -285,7 +308,7 @@ func TestUserFromOIDCSessionDoesNotProvisionOrUseRawSubjectExternalID(t *testing
 	}}
 	MarkOIDCSessionClaimsCurrent(session, time.Now().Add(time.Hour))
 
-	user, err := UserFromOIDCSession(t.Context(), logging.ContextUnavailable(), authService, session, &OIDCConfig{
+	user, err := UserFromOIDCSession(t.Context(), logging.ContextUnavailable(), provisioner, session, &OIDCConfig{
 		DefaultInitialGroups:   []string{"Developers"},
 		InitialGroupsClaimName: "roles",
 		FriendlyNameClaimName:  "name",
@@ -299,14 +322,49 @@ func TestUserFromOIDCSessionDoesNotProvisionOrUseRawSubjectExternalID(t *testing
 	require.Empty(t, authService.friendlyNameUpdates)
 }
 
+func TestUserFromOIDCSessionPendingProvisioningBlocksAuthentication(t *testing.T) {
+	externalID := oidcExternalID("https://issuer.example", "carol")
+	authService := newOIDCSessionAuthService(&model.User{
+		Username:     "carol",
+		ExternalID:   stringPtr(externalID),
+		Source:       "oidc",
+		FriendlyName: stringPtr("Old Name"),
+	})
+	provisioner := newOIDCSessionProvisionerForTest(t, authService)
+	_, err := provisioner.acquirePending(t.Context(), ExternalIdentity{
+		ExternalID: externalID,
+		Source:     "oidc",
+	}, []string{"Developers"})
+	require.NoError(t, err)
+	session := &sessions.Session{Values: map[interface{}]interface{}{
+		IDTokenClaimsSessionKey: `{
+			"iss": "https://issuer.example",
+			"sub": "carol",
+			"name": "Carol New"
+		}`,
+	}}
+	MarkOIDCSessionClaimsCurrent(session, time.Now().Add(time.Hour))
+
+	user, err := UserFromOIDCSession(t.Context(), logging.ContextUnavailable(), provisioner, session, &OIDCConfig{
+		FriendlyNameClaimName: "name",
+		PersistFriendlyName:   true,
+	})
+	require.ErrorIs(t, err, ErrExternalUserProvisioningIncomplete)
+	require.Nil(t, user)
+	require.Empty(t, authService.createdUsers)
+	require.Empty(t, authService.addedGroups)
+	require.Empty(t, authService.friendlyNameUpdates)
+}
+
 func TestUserFromOIDCSessionRequiredClaimMismatchDoesNotMutateUsers(t *testing.T) {
 	authService := newOIDCSessionAuthService()
+	provisioner := newOIDCSessionProvisionerForTest(t, authService)
 	session := &sessions.Session{Values: map[interface{}]interface{}{
 		IDTokenClaimsSessionKey: `{"iss":"https://issuer.example","sub":"carol","department":"Finance"}`,
 	}}
 	MarkOIDCSessionClaimsCurrent(session, time.Now().Add(time.Hour))
 
-	user, err := UserFromOIDCSession(t.Context(), logging.ContextUnavailable(), authService, session, &OIDCConfig{
+	user, err := UserFromOIDCSession(t.Context(), logging.ContextUnavailable(), provisioner, session, &OIDCConfig{
 		ValidateIDTokenClaims: map[string]string{"department": "Data"},
 	})
 	require.ErrorIs(t, err, ErrAuthenticatingRequest)
@@ -317,7 +375,8 @@ func TestUserFromOIDCSessionRequiredClaimMismatchDoesNotMutateUsers(t *testing.T
 
 func TestResolveOrProvisionOIDCUserFromClaimsValidatesInitialGroupsBeforeCreate(t *testing.T) {
 	authService := newOIDCSessionAuthService()
-	user, err := ResolveOrProvisionOIDCUserFromClaims(t.Context(), logging.ContextUnavailable(), authService, oidcencoding.Claims{
+	provisioner := newOIDCSessionProvisionerForTest(t, authService)
+	user, err := ResolveOrProvisionOIDCUserFromClaims(t.Context(), logging.ContextUnavailable(), provisioner, oidcencoding.Claims{
 		"iss":   "https://issuer.example",
 		"sub":   "dave",
 		"roles": []any{"Developers", 7},
@@ -330,11 +389,12 @@ func TestResolveOrProvisionOIDCUserFromClaimsValidatesInitialGroupsBeforeCreate(
 	require.Empty(t, authService.addedGroups)
 }
 
-func TestResolveOrProvisionOIDCUserFromClaimsRollsBackUserAfterInitialGroupFailure(t *testing.T) {
+func TestResolveOrProvisionOIDCUserFromClaimsLeavesPendingUserAfterInitialGroupFailure(t *testing.T) {
 	authService := newOIDCSessionAuthService()
 	authService.addUserToGroupErr = ErrInternalServerError
+	provisioner := newOIDCSessionProvisionerForTest(t, authService)
 	externalID := oidcExternalID("https://issuer.example", "erin")
-	user, err := ResolveOrProvisionOIDCUserFromClaims(t.Context(), logging.ContextUnavailable(), authService, oidcencoding.Claims{
+	user, err := ResolveOrProvisionOIDCUserFromClaims(t.Context(), logging.ContextUnavailable(), provisioner, oidcencoding.Claims{
 		"iss":   "https://issuer.example",
 		"sub":   "erin",
 		"roles": []any{"Developers"},
@@ -342,16 +402,18 @@ func TestResolveOrProvisionOIDCUserFromClaimsRollsBackUserAfterInitialGroupFailu
 		InitialGroupsClaimName: "roles",
 	})
 	require.ErrorIs(t, err, ErrInternalServerError)
+	require.ErrorIs(t, err, ErrExternalUserProvisioningIncomplete)
 	require.Nil(t, user)
 	require.Len(t, authService.createdUsers, 1)
 	require.Equal(t, []oidcGroupMembership{{username: externalID, groupID: "Developers"}}, authService.addedGroups)
-	require.Equal(t, []string{externalID}, authService.deletedUsers)
+	require.Empty(t, authService.deletedUsers)
 	_, getErr := authService.GetUserByExternalID(t.Context(), externalID)
-	require.ErrorIs(t, getErr, ErrNotFound)
+	require.NoError(t, getErr)
 }
 
 func TestUserFromSAMLSessionUsesFallbackSourceAndAssignsInitialGroups(t *testing.T) {
 	authService := newOIDCSessionAuthService()
+	provisioner := newOIDCSessionProvisionerForTest(t, authService)
 	session := &sessions.Session{Values: map[interface{}]interface{}{
 		SAMLTokenClaimsSessionKey: oidcencoding.Claims{
 			"external_id": "sam-user",
@@ -361,7 +423,7 @@ func TestUserFromSAMLSessionUsesFallbackSourceAndAssignsInitialGroups(t *testing
 		},
 	}}
 
-	user, err := UserFromSAMLSession(t.Context(), logging.ContextUnavailable(), authService, session, &CookieAuthConfig{
+	user, err := UserFromSAMLSession(t.Context(), logging.ContextUnavailable(), provisioner, session, &CookieAuthConfig{
 		ValidateIDTokenClaims:   map[string]string{"department": "Data"},
 		InitialGroupsClaimName:  "roles",
 		FriendlyNameClaimName:   "name",
@@ -388,6 +450,7 @@ func TestUserFromSAMLSessionUsesFallbackSourceAndAssignsInitialGroups(t *testing
 
 func TestUserFromSAMLSessionValidatesInitialGroupsBeforeCreate(t *testing.T) {
 	authService := newOIDCSessionAuthService()
+	provisioner := newOIDCSessionProvisionerForTest(t, authService)
 	session := &sessions.Session{Values: map[interface{}]interface{}{
 		SAMLTokenClaimsSessionKey: oidcencoding.Claims{
 			"external_id": "sam-user",
@@ -395,7 +458,7 @@ func TestUserFromSAMLSessionValidatesInitialGroupsBeforeCreate(t *testing.T) {
 		},
 	}}
 
-	user, err := UserFromSAMLSession(t.Context(), logging.ContextUnavailable(), authService, session, &CookieAuthConfig{
+	user, err := UserFromSAMLSession(t.Context(), logging.ContextUnavailable(), provisioner, session, &CookieAuthConfig{
 		InitialGroupsClaimName:  "roles",
 		ExternalUserIDClaimName: "external_id",
 	})
@@ -405,9 +468,10 @@ func TestUserFromSAMLSessionValidatesInitialGroupsBeforeCreate(t *testing.T) {
 	require.Empty(t, authService.addedGroups)
 }
 
-func TestUserFromSAMLSessionRollsBackUserAfterInitialGroupFailure(t *testing.T) {
+func TestUserFromSAMLSessionLeavesPendingUserAfterInitialGroupFailure(t *testing.T) {
 	authService := newOIDCSessionAuthService()
 	authService.addUserToGroupErr = ErrInternalServerError
+	provisioner := newOIDCSessionProvisionerForTest(t, authService)
 	session := &sessions.Session{Values: map[interface{}]interface{}{
 		SAMLTokenClaimsSessionKey: oidcencoding.Claims{
 			"external_id": "sam-user",
@@ -415,17 +479,52 @@ func TestUserFromSAMLSessionRollsBackUserAfterInitialGroupFailure(t *testing.T) 
 		},
 	}}
 
-	user, err := UserFromSAMLSession(t.Context(), logging.ContextUnavailable(), authService, session, &CookieAuthConfig{
+	user, err := UserFromSAMLSession(t.Context(), logging.ContextUnavailable(), provisioner, session, &CookieAuthConfig{
 		InitialGroupsClaimName:  "roles",
 		ExternalUserIDClaimName: "external_id",
 	})
 	require.ErrorIs(t, err, ErrInternalServerError)
+	require.ErrorIs(t, err, ErrExternalUserProvisioningIncomplete)
 	require.Nil(t, user)
 	require.Len(t, authService.createdUsers, 1)
 	require.Equal(t, []oidcGroupMembership{{username: "sam-user", groupID: "Developers"}}, authService.addedGroups)
-	require.Equal(t, []string{"sam-user"}, authService.deletedUsers)
+	require.Empty(t, authService.deletedUsers)
 	_, getErr := authService.GetUserByExternalID(t.Context(), "sam-user")
-	require.ErrorIs(t, getErr, ErrNotFound)
+	require.NoError(t, getErr)
+}
+
+func TestUserFromSAMLSessionPendingProvisioningBlocksAuthentication(t *testing.T) {
+	authService := newOIDCSessionAuthService(&model.User{
+		Username:     "sam-user",
+		ExternalID:   stringPtr("sam-user"),
+		Source:       "saml",
+		FriendlyName: stringPtr("Old Name"),
+	})
+	provisioner := newOIDCSessionProvisionerForTest(t, authService)
+	_, err := provisioner.acquirePending(t.Context(), ExternalIdentity{
+		ExternalID: "sam-user",
+		Source:     "saml",
+	}, []string{"Developers"})
+	require.NoError(t, err)
+	session := &sessions.Session{Values: map[interface{}]interface{}{
+		SAMLTokenClaimsSessionKey: oidcencoding.Claims{
+			"external_id": "sam-user",
+			"name":        "Sam New",
+			"roles":       []any{"Developers", 7},
+		},
+	}}
+
+	user, err := UserFromSAMLSession(t.Context(), logging.ContextUnavailable(), provisioner, session, &CookieAuthConfig{
+		InitialGroupsClaimName:  "roles",
+		FriendlyNameClaimName:   "name",
+		ExternalUserIDClaimName: "external_id",
+		PersistFriendlyName:     true,
+	})
+	require.ErrorIs(t, err, ErrExternalUserProvisioningIncomplete)
+	require.Nil(t, user)
+	require.Empty(t, authService.createdUsers)
+	require.Empty(t, authService.addedGroups)
+	require.Empty(t, authService.friendlyNameUpdates)
 }
 
 func TestUserFromSAMLSessionExistingUserIgnoresMalformedInitialGroupClaim(t *testing.T) {
@@ -435,6 +534,7 @@ func TestUserFromSAMLSessionExistingUserIgnoresMalformedInitialGroupClaim(t *tes
 		Source:       "saml",
 		FriendlyName: stringPtr("Old Name"),
 	})
+	provisioner := newOIDCSessionProvisionerForTest(t, authService)
 	session := &sessions.Session{Values: map[interface{}]interface{}{
 		SAMLTokenClaimsSessionKey: oidcencoding.Claims{
 			"external_id": "sam-user",
@@ -443,7 +543,7 @@ func TestUserFromSAMLSessionExistingUserIgnoresMalformedInitialGroupClaim(t *tes
 		},
 	}}
 
-	user, err := UserFromSAMLSession(t.Context(), logging.ContextUnavailable(), authService, session, &CookieAuthConfig{
+	user, err := UserFromSAMLSession(t.Context(), logging.ContextUnavailable(), provisioner, session, &CookieAuthConfig{
 		InitialGroupsClaimName:  "roles",
 		FriendlyNameClaimName:   "name",
 		ExternalUserIDClaimName: "external_id",

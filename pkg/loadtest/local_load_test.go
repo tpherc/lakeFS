@@ -91,6 +91,7 @@ func TestLocalLoad(t *testing.T) {
 		c,
 		authenticator,
 		authService,
+		auth.NewExternalIdentityProvisioner(authService, kvStore, logger),
 		authenticationService,
 		blockAdapter,
 		meta,

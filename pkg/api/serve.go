@@ -37,6 +37,7 @@ func Serve(
 	catalog *catalog.Catalog,
 	authenticator auth.Authenticator,
 	authService auth.Service,
+	externalIdentityProvisioner *auth.ExternalIdentityProvisioner,
 	authenticationService authentication.Service,
 	blockAdapter block.Adapter,
 	metadataManager auth.MetadataManager,
@@ -76,7 +77,7 @@ func Serve(
 			cfg.GetBaseConfig().Logging.AuditLogLevel,
 			cfg.GetBaseConfig().Logging.TraceRequestHeaders,
 			authService.IsAdvancedAuth()),
-		AuthMiddleware(logger, swagger, authenticator, authService, sessionStore, &oidcConfig, &cookieAuthConfig),
+		AuthMiddleware(logger, swagger, authenticator, authService, externalIdentityProvisioner, sessionStore, &oidcConfig, &cookieAuthConfig),
 		MetricsMiddleware(swagger, requestHistograms, requestCounter),
 	)
 	controller := NewController(

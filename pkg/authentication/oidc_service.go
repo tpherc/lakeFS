@@ -2,6 +2,7 @@ package authentication
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -26,7 +27,7 @@ const (
 type OIDCService struct {
 	oidc                 oidcProtocolClient
 	callbacks            oidcCallbackResolver
-	authService          auth.Service
+	provisioner          *auth.ExternalIdentityProvisioner
 	userClaimsConfig     config.OIDC
 	sessionDuration      time.Duration
 	postLoginRedirectURL string
@@ -34,7 +35,7 @@ type OIDCService struct {
 	logger               logging.Logger
 }
 
-func NewOIDCService(ctx context.Context, authService auth.Service, providerConfig config.OIDCProvider, userClaimsConfig config.OIDC, sessionDuration time.Duration, logoutRedirectURL string, logger logging.Logger) (*OIDCService, error) {
+func NewOIDCService(ctx context.Context, provisioner *auth.ExternalIdentityProvisioner, providerConfig config.OIDCProvider, userClaimsConfig config.OIDC, sessionDuration time.Duration, logoutRedirectURL string, logger logging.Logger) (*OIDCService, error) {
 	compiledLogoutURL, err := compileOIDCLogoutURL(logoutRedirectURL, providerConfig)
 	if err != nil {
 		return nil, err
@@ -51,7 +52,7 @@ func NewOIDCService(ctx context.Context, authService auth.Service, providerConfi
 	return &OIDCService{
 		oidc:                 oidcClient,
 		callbacks:            callbacks,
-		authService:          authService,
+		provisioner:          provisioner,
 		userClaimsConfig:     userClaimsConfig,
 		sessionDuration:      sessionDuration,
 		postLoginRedirectURL: providerConfig.PostLoginRedirectURL,
@@ -137,25 +138,25 @@ func (s *OIDCService) OauthCallback(w http.ResponseWriter, r *http.Request, sess
 		redirectToLogin(w, r)
 		return
 	}
-	authOIDCConfig := oidcAuthConfig(s.userClaimsConfig)
+	authOIDCConfig := auth.OIDCConfig(s.userClaimsConfig)
 	if err := auth.ValidateOIDCRequiredClaims(claims, authOIDCConfig.ValidateIDTokenClaims); err != nil {
 		s.logger.WithError(err).Warn("OIDC required claim validation failed")
 		redirectToLogin(w, r)
 		return
 	}
-	if _, err := auth.ResolveOrProvisionOIDCUserFromClaims(r.Context(), s.logger, s.authService, claims, &authOIDCConfig); err != nil {
-		s.logger.WithError(err).Error("failed to resolve or provision OIDC user")
-		redirectToLogin(w, r)
-		return
-	}
-	normalizedClaims, err := normalizeOIDCClaims(claims, s.userClaimsConfig)
+	claimsJSON, err := prepareOIDCSessionClaims(claims, s.userClaimsConfig)
 	if err != nil {
 		s.logger.WithError(err).Error("failed to normalize OIDC claims")
 		redirectToLogin(w, r)
 		return
 	}
+	if _, err := auth.ResolveOrProvisionOIDCUserFromClaims(r.Context(), s.logger, s.provisioner, claims, &authOIDCConfig); err != nil {
+		s.logger.WithError(err).Error("failed to resolve or provision OIDC user")
+		redirectToLogin(w, r)
+		return
+	}
 	expiresAt := time.Now().Add(s.sessionDuration)
-	if err := oidcSession.SaveClaims(normalizedClaims, expiresAt); err != nil {
+	if err := oidcSession.SaveClaimsJSON(claimsJSON, expiresAt); err != nil {
 		s.logger.WithError(err).Error("failed to save OIDC session")
 		redirectToLogin(w, r)
 		return
@@ -252,22 +253,26 @@ func normalizeOIDCClaims(claims encoding.Claims, cfg config.OIDC) (encoding.Clai
 	return normalized, nil
 }
 
+func prepareOIDCSessionClaims(claims encoding.Claims, cfg config.OIDC) (string, error) {
+	normalizedClaims, err := normalizeOIDCClaims(claims, cfg)
+	if err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(normalizedClaims)
+	if err != nil {
+		return "", err
+	}
+	if len(data) > oidcClaimsMaxJSONSize {
+		return "", fmt.Errorf("%w: normalized OIDC claims exceed %d bytes", ErrInvalidRequest, oidcClaimsMaxJSONSize)
+	}
+	return string(data), nil
+}
+
 func copyConfiguredClaim(dst, src encoding.Claims, claimName string) {
 	if claimName == "" {
 		return
 	}
 	if value, ok := src[claimName]; ok {
 		dst[claimName] = value
-	}
-}
-
-func oidcAuthConfig(cfg config.OIDC) auth.OIDCConfig {
-	return auth.OIDCConfig{
-		ValidateIDTokenClaims:  cfg.ValidateIDTokenClaims,
-		DefaultInitialGroups:   cfg.DefaultInitialGroups,
-		InitialGroupsClaimName: cfg.InitialGroupsClaimName,
-		FriendlyNameClaimName:  cfg.FriendlyNameClaimName,
-		EmailClaimName:         cfg.EmailClaimName,
-		PersistFriendlyName:    cfg.PersistFriendlyName,
 	}
 }

@@ -50,7 +50,7 @@ func TestOIDCSessionReissueOnlyWhenEncodingUpgradeNeeded(t *testing.T) {
 		gotReq.AddCookie(responseCookieByName(t, rec.Result(), auth.OIDCAuthSessionName))
 		gotRec := httptest.NewRecorder()
 
-		user, err := checkSecurityRequirements(gotRec, gotReq, securityRequirements, logging.ContextUnavailable(), nil, authService, store, &auth.OIDCConfig{}, nil)
+		user, err := checkSecurityRequirements(gotRec, gotReq, securityRequirements, logging.ContextUnavailable(), nil, authService, newMiddlewareProvisioner(t, authService), store, &auth.OIDCConfig{}, nil)
 		if err == nil {
 			t.Fatal("expected historical OIDC cookie to fail authentication")
 		}
@@ -79,7 +79,7 @@ func TestOIDCSessionReissueOnlyWhenEncodingUpgradeNeeded(t *testing.T) {
 		gotReq.AddCookie(responseCookieByName(t, rec.Result(), auth.OIDCAuthSessionName))
 		gotRec := httptest.NewRecorder()
 
-		user, err := checkSecurityRequirements(gotRec, gotReq, securityRequirements, logging.ContextUnavailable(), nil, authService, store, &auth.OIDCConfig{}, nil)
+		user, err := checkSecurityRequirements(gotRec, gotReq, securityRequirements, logging.ContextUnavailable(), nil, authService, newMiddlewareProvisioner(t, authService), store, &auth.OIDCConfig{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -52,7 +52,7 @@ type CookieAuthConfig struct {
 	PersistFriendlyName     bool
 }
 
-func UserFromSAMLSession(ctx context.Context, logger logging.Logger, authService Service, authSession *sessions.Session, cookieAuthConfig *CookieAuthConfig) (*model.User, error) {
+func UserFromSAMLSession(ctx context.Context, logger logging.Logger, provisioner *ExternalIdentityProvisioner, authSession *sessions.Session, cookieAuthConfig *CookieAuthConfig) (*model.User, error) {
 	idTokenClaims, ok := authSession.Values[SAMLTokenClaimsSessionKey].(oidcencoding.Claims)
 	if idTokenClaims == nil {
 		return nil, nil
@@ -101,21 +101,18 @@ func UserFromSAMLSession(ctx context.Context, logger logging.Logger, authService
 		FriendlyName: friendlyName,
 	}
 	options := ExternalIdentityProvisioningOptions{PersistFriendlyName: cookieAuthConfig.PersistFriendlyName}
-	user, found, err := ResolveExternalUser(ctx, logger, authService, identity, options)
-	if err != nil || found {
-		return user, err
-	}
-
-	groupsClaim := idTokenClaims[cookieAuthConfig.InitialGroupsClaimName]
-	initialGroups, err := initialGroupsFromClaims(groupsClaim, cookieAuthConfig.DefaultInitialGroups)
-	if err != nil {
-		log.WithError(err).WithField("groups_claim", groupsClaim).Error("Failed to parse initial groups claim")
-		return nil, ErrAuthenticatingRequest
-	}
-	return ProvisionExternalUser(ctx, logger, authService, identity, initialGroups, options)
+	return provisioner.ResolveOrProvisionExternalUser(ctx, identity, func() ([]string, error) {
+		groupsClaim := idTokenClaims[cookieAuthConfig.InitialGroupsClaimName]
+		initialGroups, err := initialGroupsFromClaims(groupsClaim, cookieAuthConfig.DefaultInitialGroups)
+		if err != nil {
+			log.WithError(err).WithField("groups_claim", groupsClaim).Error("Failed to parse initial groups claim")
+			return nil, ErrAuthenticatingRequest
+		}
+		return initialGroups, nil
+	}, options)
 }
 
-func UserFromOIDCSession(ctx context.Context, logger logging.Logger, authService Service, authSession *sessions.Session, oidcConfig *OIDCConfig) (*model.User, error) {
+func UserFromOIDCSession(ctx context.Context, logger logging.Logger, provisioner *ExternalIdentityProvisioner, authSession *sessions.Session, oidcConfig *OIDCConfig) (*model.User, error) {
 	idTokenClaims, found, err := oidcClaimsFromSession(authSession, time.Now())
 	if !found {
 		return nil, nil
@@ -124,18 +121,23 @@ func UserFromOIDCSession(ctx context.Context, logger logging.Logger, authService
 		logger.WithError(err).Debug("failed decoding OIDC token claims")
 		return nil, fmt.Errorf("%w: %w", ErrAuthenticatingRequest, err)
 	}
-	return ResolveOIDCUserFromClaims(ctx, logger, authService, idTokenClaims, oidcConfig)
+	return ResolveOIDCUserFromClaims(ctx, logger, provisioner, idTokenClaims, oidcConfig)
 }
 
 // ResolveOIDCUserFromClaims resolves a previously provisioned OIDC user from
 // minimized session claims. It intentionally does not provision users because
 // creation-only claims are not kept in the long-lived browser session.
-func ResolveOIDCUserFromClaims(ctx context.Context, logger logging.Logger, authService Service, idTokenClaims oidcencoding.Claims, oidcConfig *OIDCConfig) (*model.User, error) {
+func ResolveOIDCUserFromClaims(ctx context.Context, logger logging.Logger, provisioner *ExternalIdentityProvisioner, idTokenClaims oidcencoding.Claims, oidcConfig *OIDCConfig) (*model.User, error) {
+	cfg := effectiveOIDCConfig(oidcConfig)
+	if err := ValidateOIDCRequiredClaims(idTokenClaims, cfg.ValidateIDTokenClaims); err != nil {
+		logger.WithError(err).Error("Authentication failed on validating ID token claims")
+		return nil, ErrAuthenticatingRequest
+	}
 	identity, _, options, err := oidcIdentityFromClaims(logger, idTokenClaims, oidcConfig)
 	if err != nil {
 		return nil, err
 	}
-	user, found, err := ResolveExternalUser(ctx, logger, authService, identity, options)
+	user, found, err := provisioner.ResolveExternalUser(ctx, identity, options)
 	if err != nil {
 		return nil, err
 	}
@@ -147,23 +149,23 @@ func ResolveOIDCUserFromClaims(ctx context.Context, logger logging.Logger, authS
 }
 
 // ResolveOrProvisionOIDCUserFromClaims resolves or provisions a lakeFS user
-// from full verified OIDC claims during callback completion.
-func ResolveOrProvisionOIDCUserFromClaims(ctx context.Context, logger logging.Logger, authService Service, idTokenClaims oidcencoding.Claims, oidcConfig *OIDCConfig) (*model.User, error) {
+// from full verified OIDC claims during callback completion. The caller must
+// validate configured required claims before calling so deterministic callback
+// failures happen before any user mutation.
+func ResolveOrProvisionOIDCUserFromClaims(ctx context.Context, logger logging.Logger, provisioner *ExternalIdentityProvisioner, idTokenClaims oidcencoding.Claims, oidcConfig *OIDCConfig) (*model.User, error) {
+	cfg := effectiveOIDCConfig(oidcConfig)
 	identity, groupsClaim, options, err := oidcIdentityFromClaims(logger, idTokenClaims, oidcConfig)
 	if err != nil {
 		return nil, err
 	}
-	user, found, err := ResolveExternalUser(ctx, logger, authService, identity, options)
-	if err != nil || found {
-		return user, err
-	}
-	cfg := effectiveOIDCConfig(oidcConfig)
-	initialGroups, err := initialGroupsFromClaims(groupsClaim, cfg.DefaultInitialGroups)
-	if err != nil {
-		logger.WithError(err).WithField("groups_claim", groupsClaim).Error("Failed to parse initial groups claim")
-		return nil, ErrAuthenticatingRequest
-	}
-	return ProvisionExternalUser(ctx, logger, authService, identity, initialGroups, options)
+	return provisioner.ResolveOrProvisionExternalUser(ctx, identity, func() ([]string, error) {
+		initialGroups, err := initialGroupsFromClaims(groupsClaim, cfg.DefaultInitialGroups)
+		if err != nil {
+			logger.WithError(err).WithField("groups_claim", groupsClaim).Error("Failed to parse initial groups claim")
+			return nil, ErrAuthenticatingRequest
+		}
+		return initialGroups, nil
+	}, options)
 }
 
 func oidcIdentityFromClaims(logger logging.Logger, idTokenClaims oidcencoding.Claims, oidcConfig *OIDCConfig) (ExternalIdentity, any, ExternalIdentityProvisioningOptions, error) {
@@ -179,10 +181,6 @@ func oidcIdentityFromClaims(logger logging.Logger, idTokenClaims oidcencoding.Cl
 		return ExternalIdentity{}, nil, ExternalIdentityProvisioningOptions{}, ErrAuthenticatingRequest
 	}
 	externalID := oidcExternalID(issuer, subject)
-	if err := ValidateOIDCRequiredClaims(idTokenClaims, cfg.ValidateIDTokenClaims); err != nil {
-		logger.WithError(err).Error("Authentication failed on validating ID token claims")
-		return ExternalIdentity{}, nil, ExternalIdentityProvisioningOptions{}, ErrAuthenticatingRequest
-	}
 	friendlyName := ""
 	if cfg.FriendlyNameClaimName != "" {
 		friendlyName, _ = idTokenClaims[cfg.FriendlyNameClaimName].(string)

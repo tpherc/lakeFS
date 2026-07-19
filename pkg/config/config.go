@@ -587,6 +587,7 @@ func ValidateBlockstore(c *Blockstore) error {
 
 // NewConfig - General (common) configuration
 func NewConfig(cfgType string, c Config) (*BaseConfig, error) {
+	oidcProviderInConfig := viper.InConfig("auth.providers.oidc")
 	// Inform viper of all expected fields.  Otherwise, it fails to deserialize from the
 	// environment.
 	SetDefaults(cfgType, c)
@@ -594,6 +595,7 @@ func NewConfig(cfgType string, c Config) (*BaseConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	preserveConfiguredProviderBlocks(c, oidcProviderInConfig)
 
 	cfg := c.GetBaseConfig()
 	// setup logging package
@@ -616,6 +618,16 @@ func SetDefaults(cfgType string, c Config) {
 
 func Unmarshal(c Config) error {
 	return viper.UnmarshalExact(&c, DecoderConfig())
+}
+
+func preserveConfiguredProviderBlocks(c Config, oidcProviderInConfig bool) {
+	if !oidcProviderInConfig {
+		return
+	}
+	baseAuthCfg := c.AuthConfig().GetBaseAuthConfig()
+	if baseAuthCfg.Providers.OIDC == nil {
+		baseAuthCfg.Providers.OIDC = &OIDCProvider{}
+	}
 }
 
 func DecoderConfig() viper.DecoderConfigOption {
