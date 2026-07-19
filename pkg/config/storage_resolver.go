@@ -295,26 +295,17 @@ func (b *Blockstore) IsMultiStorage() bool {
 	return len(b.storages) > 0
 }
 
+// Keep separate public names for creation and persisted-read call sites; the
+// current compatibility rule is shared by both paths.
 func (b *Blockstore) ResolveNewRepositoryStorageID(storageID string) (string, error) {
-	if !b.IsMultiStorage() {
-		if storageID != SingleBlockstoreID {
-			return "", fmt.Errorf("storage id %q: %w", storageID, ErrNoStorageConfig)
-		}
-		return SingleBlockstoreID, nil
-	}
-	if storageID == SingleBlockstoreID {
-		if b.compatibleStorageID == "" {
-			return "", fmt.Errorf("storage id %q: %w", storageID, ErrNoStorageConfig)
-		}
-		return b.compatibleStorageID, nil
-	}
-	if b.GetStorageByID(storageID) == nil {
-		return "", fmt.Errorf("storage id %q: %w", storageID, ErrNoStorageConfig)
-	}
-	return storageID, nil
+	return b.resolveRepositoryStorageID(storageID)
 }
 
 func (b *Blockstore) ResolveStoredRepositoryStorageID(storageID string) (string, error) {
+	return b.resolveRepositoryStorageID(storageID)
+}
+
+func (b *Blockstore) resolveRepositoryStorageID(storageID string) (string, error) {
 	if !b.IsMultiStorage() {
 		if storageID != SingleBlockstoreID {
 			return "", fmt.Errorf("storage id %q: %w", storageID, ErrNoStorageConfig)
