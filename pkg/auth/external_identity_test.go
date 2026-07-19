@@ -286,6 +286,51 @@ func TestProvisionExternalUserCreateRaceFetchesWinner(t *testing.T) {
 	require.Empty(t, authService.deletedUsers)
 }
 
+func TestProvisionExternalUserCreateFailureWrapsInternalServerError(t *testing.T) {
+	authService := newExternalIdentityAuthService()
+	provisioner := newExternalIdentityProvisionerForTest(t, authService)
+	createErr := errors.New("create user storage unavailable")
+	authService.createUserErr = createErr
+
+	user, err := resolveOrProvisionForTest(t, provisioner, ExternalIdentity{
+		ExternalID: "carol",
+		Source:     "oidc",
+	}, []string{"Developers"}, ExternalIdentityProvisioningOptions{})
+	require.ErrorIs(t, err, createErr)
+	require.ErrorIs(t, err, ErrInternalServerError)
+	require.ErrorIs(t, err, ErrExternalUserProvisioningIncomplete)
+	require.Nil(t, user)
+	require.Len(t, authService.createRequests, 1)
+	require.Empty(t, authService.addedGroups)
+	require.Empty(t, authService.deletedUsers)
+}
+
+func TestProvisionExternalUserCreateRaceFetchFailureWrapsInternalServerError(t *testing.T) {
+	authService := newExternalIdentityAuthService()
+	provisioner := newExternalIdentityProvisionerForTest(t, authService)
+	fetchErr := errors.New("fetch race winner failed")
+	authService.createUserErr = ErrAlreadyExists
+	authService.afterGetUserByExternalID = func(externalID string, call int) {
+		if externalID == "carol" && call == 1 {
+			authService.mu.Lock()
+			authService.getUserByExternalErr = fetchErr
+			authService.mu.Unlock()
+		}
+	}
+
+	user, err := resolveOrProvisionForTest(t, provisioner, ExternalIdentity{
+		ExternalID: "carol",
+		Source:     "oidc",
+	}, []string{"Developers"}, ExternalIdentityProvisioningOptions{})
+	require.ErrorIs(t, err, fetchErr)
+	require.ErrorIs(t, err, ErrInternalServerError)
+	require.ErrorIs(t, err, ErrExternalUserProvisioningIncomplete)
+	require.Nil(t, user)
+	require.Len(t, authService.createRequests, 1)
+	require.Empty(t, authService.addedGroups)
+	require.Empty(t, authService.deletedUsers)
+}
+
 func TestProvisionExternalUserGroupAlreadyExistsIsSuccess(t *testing.T) {
 	authService := newExternalIdentityAuthService()
 	provisioner := newExternalIdentityProvisionerForTest(t, authService)
@@ -545,6 +590,31 @@ func TestResolveExternalUserInvalidMarkerStateFailsClosedWithoutFriendlyNameUpda
 	require.Empty(t, authService.friendlyNameUpdates)
 }
 
+func TestResolveExternalUserMarkerUsernameMismatchFailsClosedWithoutFriendlyNameUpdate(t *testing.T) {
+	authService := newExternalIdentityAuthService(&model.User{
+		Username:     "jill",
+		ExternalID:   stringPtr("jill"),
+		Source:       "oidc",
+		FriendlyName: stringPtr("Old Name"),
+	})
+	provisioner := newExternalIdentityProvisionerForTest(t, authService)
+	identity := ExternalIdentity{ExternalID: "jill", Source: "oidc", FriendlyName: "New Name"}
+	require.NoError(t, provisioner.store.SetIf(t.Context(), identity, &externalIdentityProvisioningRecord{
+		State:          externalIdentityProvisioningComplete,
+		Username:       "other-user",
+		Source:         "oidc",
+		ExternalIDHash: externalIdentityProvisioningHash(identity),
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}, nil))
+
+	user, found, err := provisioner.ResolveExternalUser(t.Context(), identity, ExternalIdentityProvisioningOptions{PersistFriendlyName: true})
+	require.ErrorIs(t, err, ErrAuthenticatingRequest)
+	require.False(t, found)
+	require.Nil(t, user)
+	require.Empty(t, authService.friendlyNameUpdates)
+}
+
 func TestResolveExternalUserCorruptMarkerWrapsInternalServerError(t *testing.T) {
 	ctx := t.Context()
 	kvStore := kvtest.GetStore(ctx, t)
@@ -613,6 +683,23 @@ func TestExternalIdentityProvisioningInfrastructureFailuresWrapInternalServerErr
 			require.Empty(t, authService.createRequests)
 		})
 	}
+}
+
+func TestResolveExternalUserLookupFailureWrapsInternalServerError(t *testing.T) {
+	authService := newExternalIdentityAuthService()
+	provisioner := newExternalIdentityProvisionerForTest(t, authService)
+	lookupErr := errors.New("lookup storage unavailable")
+	authService.getUserByExternalErr = lookupErr
+
+	user, found, err := provisioner.ResolveExternalUser(t.Context(), ExternalIdentity{
+		ExternalID: "mike",
+		Source:     "oidc",
+	}, ExternalIdentityProvisioningOptions{})
+	require.ErrorIs(t, err, lookupErr)
+	require.ErrorIs(t, err, ErrInternalServerError)
+	require.False(t, found)
+	require.Nil(t, user)
+	require.Empty(t, authService.friendlyNameUpdates)
 }
 
 func TestResolveExternalUserInvalidIdentityDoesNotMutate(t *testing.T) {

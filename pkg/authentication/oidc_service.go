@@ -36,6 +36,9 @@ type OIDCService struct {
 }
 
 func NewOIDCService(ctx context.Context, provisioner *auth.ExternalIdentityProvisioner, providerConfig config.OIDCProvider, userClaimsConfig config.OIDC, sessionDuration time.Duration, logoutRedirectURL string, logger logging.Logger) (*OIDCService, error) {
+	if provisioner == nil {
+		return nil, fmt.Errorf("%w: OIDC external identity provisioner is required", auth.ErrInternalServerError)
+	}
 	compiledLogoutURL, err := compileOIDCLogoutURL(logoutRedirectURL, providerConfig)
 	if err != nil {
 		return nil, err

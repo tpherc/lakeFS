@@ -359,8 +359,14 @@ func TestNormalizeOIDCClaimsRequiresIssuer(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestNewOIDCServiceRejectsNilProvisionerBeforeProviderInitialization(t *testing.T) {
+	service, err := NewOIDCService(t.Context(), nil, config.OIDCProvider{}, config.OIDC{}, time.Hour, "/auth/login", logging.ContextUnavailable())
+	require.ErrorIs(t, err, auth.ErrInternalServerError)
+	require.Nil(t, service)
+}
+
 func TestNewOIDCServiceRejectsInvalidLogoutURLBeforeProviderInitialization(t *testing.T) {
-	service, err := NewOIDCService(t.Context(), nil, config.OIDCProvider{}, config.OIDC{}, time.Hour, "logout", logging.ContextUnavailable())
+	service, err := NewOIDCService(t.Context(), newOIDCProvisionerForTest(t, newOIDCCallbackAuthService()), config.OIDCProvider{}, config.OIDC{}, time.Hour, "logout", logging.ContextUnavailable())
 	require.Error(t, err)
 	require.Nil(t, service)
 }

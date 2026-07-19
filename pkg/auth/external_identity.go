@@ -243,7 +243,7 @@ func (p *ExternalIdentityProvisioner) lookupExternalUser(ctx context.Context, id
 		return nil, false, nil
 	}
 	log.WithError(err).Error("Failed to get external user from database")
-	return nil, false, fmt.Errorf("get user by external ID: %w", err)
+	return nil, false, externalIdentityInternalError("get user by external ID", err)
 }
 
 func loadInitialGroups(initialGroups func() ([]string, error)) ([]string, error) {
@@ -287,11 +287,11 @@ func (p *ExternalIdentityProvisioner) completeProvisioning(ctx context.Context, 
 	created := true
 	if _, err := p.authService.CreateUser(ctx, &newUser); err != nil {
 		if !errors.Is(err, ErrAlreadyExists) {
-			return nil, p.provisioningFailure(ctx, identity, lease, fmt.Errorf("create user: %w", err))
+			return nil, p.provisioningFailure(ctx, identity, lease, externalIdentityInternalError("create user", err))
 		}
 		winner, err := p.authService.GetUserByExternalID(ctx, identity.ExternalID)
 		if err != nil {
-			return nil, p.provisioningFailure(ctx, identity, lease, fmt.Errorf("get user by external ID: %w", err))
+			return nil, p.provisioningFailure(ctx, identity, lease, externalIdentityInternalError("get user after create race", err))
 		}
 		user = winner
 		created = false
@@ -541,6 +541,9 @@ func validateProvisioningRecord(identity ExternalIdentity, record *externalIdent
 	}
 	if strings.TrimSpace(record.Username) == "" {
 		return fmt.Errorf("%w: external provisioning record username is required", ErrAuthenticatingRequest)
+	}
+	if record.Username != identity.ExternalID {
+		return fmt.Errorf("%w: external provisioning record username does not match requested identity", ErrAuthenticatingRequest)
 	}
 	switch record.State {
 	case externalIdentityProvisioningPending, externalIdentityProvisioningComplete:
