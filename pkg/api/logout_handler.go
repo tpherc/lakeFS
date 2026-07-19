@@ -22,6 +22,8 @@ func NewLogoutHandler(sessionStore sessions.Store, logger logging.Logger, logout
 }
 
 func clearLogoutSessions(w http.ResponseWriter, r *http.Request, sessionStore sessions.Store, logger logging.Logger) error {
+	// Logout succeeds only when all lakeFS-owned auth sessions are cleared.
+	// Keep attempting every clear so one failure does not mask others.
 	var errs []error
 	for _, sessionName := range []string{auth.InternalAuthSessionName, auth.OIDCAuthSessionName, auth.SAMLAuthSessionName} {
 		if err := auth.ClearSession(w, r, sessionStore, sessionName); err != nil {

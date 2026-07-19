@@ -40,7 +40,7 @@ func TestLogoutHandlerClearsSessionsAndRedirectsToOIDCProviderLogout(t *testing.
 	}
 }
 
-func TestLogoutHandlerAttemptsAllSessionClearsAndFailsOnAnyError(t *testing.T) {
+func TestLogoutHandlerAttemptsAllSessionClearsAndFailsIfAnyClearFails(t *testing.T) {
 	store := &recordingSessionStore{
 		getErrors: map[string]error{
 			auth.InternalAuthSessionName: errors.New("internal store failure"),
