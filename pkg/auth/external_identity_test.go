@@ -4,17 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/treeverse/lakefs/pkg/auth/model"
+	"github.com/treeverse/lakefs/pkg/kv"
 	"github.com/treeverse/lakefs/pkg/kv/kvtest"
 	"github.com/treeverse/lakefs/pkg/logging"
 )
 
 type externalIdentityAuthService struct {
 	Service
+	mu                sync.Mutex
 	usersByExternalID map[string]*model.User
 
 	createRequests      []*model.User
@@ -28,6 +31,10 @@ type externalIdentityAuthService struct {
 	createRaceWinner     *model.User
 	addUserToGroupErr    error
 	deleteUserErr        error
+
+	afterGetUserByExternalID func(externalID string, call int)
+	beforeAddUserToGroup     func(username, groupID string, call int)
+	addUserToGroupCalls      int
 }
 
 type externalGroupMembership struct {
@@ -73,18 +80,29 @@ func resolveOrProvisionForTest(t *testing.T, provisioner *ExternalIdentityProvis
 }
 
 func (s *externalIdentityAuthService) GetUserByExternalID(_ context.Context, externalID string) (*model.User, error) {
+	s.mu.Lock()
 	s.getUserCalls++
-	if s.getUserByExternalErr != nil {
-		return nil, s.getUserByExternalErr
+	call := s.getUserCalls
+	getErr := s.getUserByExternalErr
+	user := cloneUser(s.usersByExternalID[externalID])
+	hook := s.afterGetUserByExternalID
+	s.mu.Unlock()
+
+	if hook != nil {
+		hook(externalID, call)
 	}
-	user := s.usersByExternalID[externalID]
+	if getErr != nil {
+		return nil, getErr
+	}
 	if user == nil {
 		return nil, ErrNotFound
 	}
-	return cloneUser(user), nil
+	return user, nil
 }
 
 func (s *externalIdentityAuthService) CreateUser(_ context.Context, user *model.User) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.createRequests = append(s.createRequests, cloneUser(user))
 	if s.createUserErr != nil {
 		if errors.Is(s.createUserErr, ErrAlreadyExists) && s.createRaceWinner != nil && s.createRaceWinner.ExternalID != nil {
@@ -103,11 +121,25 @@ func (s *externalIdentityAuthService) CreateUser(_ context.Context, user *model.
 }
 
 func (s *externalIdentityAuthService) AddUserToGroup(_ context.Context, username, groupID string) error {
+	s.mu.Lock()
+	s.addUserToGroupCalls++
+	call := s.addUserToGroupCalls
+	hook := s.beforeAddUserToGroup
+	s.mu.Unlock()
+
+	if hook != nil {
+		hook(username, groupID, call)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.addedGroups = append(s.addedGroups, externalGroupMembership{username: username, groupID: groupID})
 	return s.addUserToGroupErr
 }
 
 func (s *externalIdentityAuthService) DeleteUser(_ context.Context, username string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.deletedUsers = append(s.deletedUsers, username)
 	if s.deleteUserErr != nil {
 		return s.deleteUserErr
@@ -121,6 +153,8 @@ func (s *externalIdentityAuthService) DeleteUser(_ context.Context, username str
 }
 
 func (s *externalIdentityAuthService) UpdateUserFriendlyName(_ context.Context, username, friendlyName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.friendlyNameUpdates = append(s.friendlyNameUpdates, externalFriendlyNameUpdate{
 		username:     username,
 		friendlyName: friendlyName,
@@ -304,10 +338,9 @@ func TestProvisionExternalUserRetryRepairsStoredInitialGroups(t *testing.T) {
 	require.Nil(t, user)
 	require.Empty(t, authService.deletedUsers)
 
-	record, predicate, err := provisioner.store.Get(t.Context(), identity)
+	record, _, err := provisioner.store.Get(t.Context(), identity)
 	require.NoError(t, err)
-	record.UpdatedAt = time.Now().Add(-externalIdentityProvisioningLeaseTTL - time.Minute)
-	require.NoError(t, provisioner.store.SetIf(t.Context(), identity, record, predicate))
+	require.Empty(t, record.OwnerToken)
 
 	authService.addUserToGroupErr = nil
 	calledGroupLoader := false
@@ -324,12 +357,115 @@ func TestProvisionExternalUserRetryRepairsStoredInitialGroups(t *testing.T) {
 	}, authService.addedGroups)
 }
 
+func TestResolveOrProvisionExternalUserBlocksConcurrentPendingAfterLookupMiss(t *testing.T) {
+	authService := newExternalIdentityAuthService()
+	provisioner := newExternalIdentityProvisionerForTest(t, authService)
+	identity := ExternalIdentity{ExternalID: "grace", Source: "oidc"}
+	firstLookupDone := make(chan struct{})
+	releaseFirstLookup := make(chan struct{})
+	pendingUserCreated := make(chan struct{})
+	releaseGroupAdd := make(chan struct{})
+
+	var firstLookupOnce sync.Once
+	authService.afterGetUserByExternalID = func(externalID string, call int) {
+		if externalID == identity.ExternalID && call == 1 {
+			firstLookupOnce.Do(func() {
+				close(firstLookupDone)
+				<-releaseFirstLookup
+			})
+		}
+	}
+	var groupAddOnce sync.Once
+	authService.beforeAddUserToGroup = func(username, _ string, call int) {
+		if username == identity.ExternalID && call == 1 {
+			groupAddOnce.Do(func() {
+				close(pendingUserCreated)
+				<-releaseGroupAdd
+			})
+		}
+	}
+
+	firstResult := make(chan error, 1)
+	firstGroupLoaderCalled := false
+	go func() {
+		_, err := provisioner.ResolveOrProvisionExternalUser(t.Context(), identity, func() ([]string, error) {
+			firstGroupLoaderCalled = true
+			return []string{"First"}, nil
+		}, ExternalIdentityProvisioningOptions{})
+		firstResult <- err
+	}()
+	waitForTestSignal(t, firstLookupDone)
+
+	secondResult := make(chan error, 1)
+	go func() {
+		_, err := resolveOrProvisionForTest(t, provisioner, identity, []string{"Second"}, ExternalIdentityProvisioningOptions{})
+		secondResult <- err
+	}()
+	waitForTestSignal(t, pendingUserCreated)
+
+	close(releaseFirstLookup)
+	err := waitForTestResult(t, firstResult)
+	require.ErrorIs(t, err, ErrExternalUserProvisioningIncomplete)
+	require.False(t, firstGroupLoaderCalled)
+
+	close(releaseGroupAdd)
+	require.NoError(t, waitForTestResult(t, secondResult))
+	require.Equal(t, []externalGroupMembership{{username: "grace", groupID: "Second"}}, authService.addedGroups)
+}
+
+func TestResolveOrProvisionExternalUserRefetchesCompletedRaceAfterLookupMiss(t *testing.T) {
+	authService := newExternalIdentityAuthService()
+	provisioner := newExternalIdentityProvisionerForTest(t, authService)
+	identity := ExternalIdentity{ExternalID: "mona", Source: "oidc", FriendlyName: "Mona"}
+	var hookErr error
+	var completeRaceOnce sync.Once
+	authService.afterGetUserByExternalID = func(externalID string, call int) {
+		if externalID != identity.ExternalID || call != 1 {
+			return
+		}
+		completeRaceOnce.Do(func() {
+			authService.mu.Lock()
+			authService.usersByExternalID[identity.ExternalID] = &model.User{
+				Username:   "mona",
+				ExternalID: stringPtr(identity.ExternalID),
+				Source:     identity.Source,
+			}
+			authService.mu.Unlock()
+
+			now := time.Now()
+			hookErr = provisioner.store.SetIf(t.Context(), identity, &externalIdentityProvisioningRecord{
+				State:          externalIdentityProvisioningComplete,
+				Username:       "mona",
+				Source:         identity.Source,
+				ExternalIDHash: externalIdentityProvisioningHash(identity),
+				InitialGroups:  []string{"Race"},
+				Generation:     1,
+				CreatedAt:      now,
+				UpdatedAt:      now,
+			}, nil)
+		})
+	}
+	calledGroupLoader := false
+
+	user, err := provisioner.ResolveOrProvisionExternalUser(t.Context(), identity, func() ([]string, error) {
+		calledGroupLoader = true
+		return []string{"Current"}, nil
+	}, ExternalIdentityProvisioningOptions{})
+	require.NoError(t, hookErr)
+	require.NoError(t, err)
+	require.Equal(t, "mona", user.Username)
+	require.False(t, calledGroupLoader)
+	require.Empty(t, authService.createRequests)
+	require.Empty(t, authService.addedGroups)
+}
+
 func TestPendingProvisioningBlocksAuthentication(t *testing.T) {
 	authService := newExternalIdentityAuthService()
 	provisioner := newExternalIdentityProvisionerForTest(t, authService)
 	identity := ExternalIdentity{ExternalID: "gina", Source: "oidc"}
-	_, err := provisioner.acquirePending(t.Context(), identity, []string{"Developers"})
+	_, acquired, err := provisioner.createPending(t.Context(), identity, []string{"Developers"})
 	require.NoError(t, err)
+	require.True(t, acquired)
 
 	user, found, err := provisioner.ResolveExternalUser(t.Context(), identity, ExternalIdentityProvisioningOptions{})
 	require.ErrorIs(t, err, ErrExternalUserProvisioningIncomplete)
@@ -342,18 +478,141 @@ func TestOldProvisioningOwnerCannotCompleteAfterTakeover(t *testing.T) {
 	authService := newExternalIdentityAuthService()
 	provisioner := newExternalIdentityProvisionerForTest(t, authService)
 	identity := ExternalIdentity{ExternalID: "henry", Source: "oidc"}
-	lease, err := provisioner.acquirePending(t.Context(), identity, []string{"Developers"})
+	lease, acquired, err := provisioner.createPending(t.Context(), identity, []string{"Developers"})
 	require.NoError(t, err)
+	require.True(t, acquired)
 	lease.record.UpdatedAt = time.Now().Add(-externalIdentityProvisioningLeaseTTL - time.Minute)
 	require.NoError(t, provisioner.store.SetIf(t.Context(), identity, lease.record, lease.predicate))
 
 	staleRecord, stalePredicate, err := provisioner.store.Get(t.Context(), identity)
 	require.NoError(t, err)
-	_, err = provisioner.takeOverStalePending(t.Context(), identity, staleRecord, stalePredicate)
+	nextLease, acquired, err := provisioner.claimPending(t.Context(), identity, staleRecord, stalePredicate)
 	require.NoError(t, err)
+	require.True(t, acquired)
+	require.Equal(t, []string{"Developers"}, nextLease.record.InitialGroups)
 
 	_, err = provisioner.completeLease(t.Context(), identity, lease)
 	require.ErrorIs(t, err, ErrExternalUserProvisioningIncomplete)
+}
+
+func TestCompletedProvisioningMarkerWithMissingUserReprovisions(t *testing.T) {
+	authService := newExternalIdentityAuthService()
+	provisioner := newExternalIdentityProvisionerForTest(t, authService)
+	identity := ExternalIdentity{ExternalID: "irene", Source: "oidc"}
+
+	user, err := resolveOrProvisionForTest(t, provisioner, identity, []string{"Original"}, ExternalIdentityProvisioningOptions{})
+	require.NoError(t, err)
+	require.Equal(t, "irene", user.Username)
+	require.NoError(t, authService.DeleteUser(t.Context(), "irene"))
+
+	reloadedGroups := false
+	user, err = provisioner.ResolveOrProvisionExternalUser(t.Context(), identity, func() ([]string, error) {
+		reloadedGroups = true
+		return []string{"Current"}, nil
+	}, ExternalIdentityProvisioningOptions{})
+	require.NoError(t, err)
+	require.True(t, reloadedGroups)
+	require.Equal(t, "irene", user.Username)
+	require.Len(t, authService.createRequests, 2)
+	require.Equal(t, []externalGroupMembership{
+		{username: "irene", groupID: "Original"},
+		{username: "irene", groupID: "Current"},
+	}, authService.addedGroups)
+}
+
+func TestResolveExternalUserInvalidMarkerStateFailsClosedWithoutFriendlyNameUpdate(t *testing.T) {
+	authService := newExternalIdentityAuthService(&model.User{
+		Username:     "jill",
+		ExternalID:   stringPtr("jill"),
+		Source:       "oidc",
+		FriendlyName: stringPtr("Old Name"),
+	})
+	provisioner := newExternalIdentityProvisionerForTest(t, authService)
+	identity := ExternalIdentity{ExternalID: "jill", Source: "oidc", FriendlyName: "New Name"}
+	require.NoError(t, provisioner.store.SetIf(t.Context(), identity, &externalIdentityProvisioningRecord{
+		State:          "unknown",
+		Username:       "jill",
+		Source:         "oidc",
+		ExternalIDHash: externalIdentityProvisioningHash(identity),
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}, nil))
+
+	user, found, err := provisioner.ResolveExternalUser(t.Context(), identity, ExternalIdentityProvisioningOptions{PersistFriendlyName: true})
+	require.ErrorIs(t, err, ErrAuthenticatingRequest)
+	require.False(t, found)
+	require.Nil(t, user)
+	require.Empty(t, authService.friendlyNameUpdates)
+}
+
+func TestResolveExternalUserCorruptMarkerWrapsInternalServerError(t *testing.T) {
+	ctx := t.Context()
+	kvStore := kvtest.GetStore(ctx, t)
+	authService := newExternalIdentityAuthService(&model.User{
+		Username:   "kate",
+		ExternalID: stringPtr("kate"),
+		Source:     "oidc",
+	})
+	provisioner := NewExternalIdentityProvisioner(authService, kvStore, logging.ContextUnavailable())
+	identity := ExternalIdentity{ExternalID: "kate", Source: "oidc", FriendlyName: "New Name"}
+	require.NoError(t, kvStore.Set(ctx, []byte(model.PartitionKey), externalIdentityProvisioningKey(identity), []byte("{")))
+
+	user, found, err := provisioner.ResolveExternalUser(ctx, identity, ExternalIdentityProvisioningOptions{PersistFriendlyName: true})
+	require.ErrorIs(t, err, ErrInternalServerError)
+	require.False(t, found)
+	require.Nil(t, user)
+	require.Empty(t, authService.friendlyNameUpdates)
+}
+
+func TestExternalIdentityProvisioningInfrastructureFailuresWrapInternalServerError(t *testing.T) {
+	tests := []struct {
+		name       string
+		configure  func(*ExternalIdentityProvisioner)
+		resolve    bool
+		wantCreate bool
+	}{
+		{
+			name: "store get failure",
+			configure: func(p *ExternalIdentityProvisioner) {
+				p.store = &failingExternalIdentityProvisioningStore{getErr: errors.New("kv down")}
+			},
+			resolve: true,
+		},
+		{
+			name: "store set failure",
+			configure: func(p *ExternalIdentityProvisioner) {
+				p.store = &failingExternalIdentityProvisioningStore{setErr: errors.New("kv down")}
+			},
+		},
+		{
+			name: "owner token failure",
+			configure: func(p *ExternalIdentityProvisioner) {
+				p.ownerToken = func() (string, error) {
+					return "", errors.New("random down")
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			authService := newExternalIdentityAuthService()
+			provisioner := newExternalIdentityProvisionerForTest(t, authService)
+			tt.configure(provisioner)
+			identity := ExternalIdentity{ExternalID: "louis", Source: "oidc"}
+
+			if tt.resolve {
+				user, found, err := provisioner.ResolveExternalUser(t.Context(), identity, ExternalIdentityProvisioningOptions{})
+				require.ErrorIs(t, err, ErrInternalServerError)
+				require.False(t, found)
+				require.Nil(t, user)
+			} else {
+				user, err := resolveOrProvisionForTest(t, provisioner, identity, []string{"Developers"}, ExternalIdentityProvisioningOptions{})
+				require.ErrorIs(t, err, ErrInternalServerError)
+				require.Nil(t, user)
+			}
+			require.Empty(t, authService.createRequests)
+		})
+	}
 }
 
 func TestResolveExternalUserInvalidIdentityDoesNotMutate(t *testing.T) {
@@ -389,6 +648,45 @@ func TestResolveExternalUserInvalidIdentityDoesNotMutate(t *testing.T) {
 			require.Empty(t, authService.deletedUsers)
 			require.Empty(t, authService.friendlyNameUpdates)
 		})
+	}
+}
+
+type failingExternalIdentityProvisioningStore struct {
+	getErr error
+	setErr error
+}
+
+func (s *failingExternalIdentityProvisioningStore) Get(_ context.Context, _ ExternalIdentity) (*externalIdentityProvisioningRecord, kv.Predicate, error) {
+	if s.getErr != nil {
+		return nil, nil, s.getErr
+	}
+	return nil, nil, kv.ErrNotFound
+}
+
+func (s *failingExternalIdentityProvisioningStore) SetIf(_ context.Context, _ ExternalIdentity, _ *externalIdentityProvisioningRecord, _ kv.Predicate) error {
+	if s.setErr != nil {
+		return s.setErr
+	}
+	return nil
+}
+
+func waitForTestSignal(t *testing.T, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for test signal")
+	}
+}
+
+func waitForTestResult(t *testing.T, ch <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-ch:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for test result")
+		return nil
 	}
 }
 

@@ -331,11 +331,12 @@ func TestUserFromOIDCSessionPendingProvisioningBlocksAuthentication(t *testing.T
 		FriendlyName: stringPtr("Old Name"),
 	})
 	provisioner := newOIDCSessionProvisionerForTest(t, authService)
-	_, err := provisioner.acquirePending(t.Context(), ExternalIdentity{
+	_, acquired, err := provisioner.createPending(t.Context(), ExternalIdentity{
 		ExternalID: externalID,
 		Source:     "oidc",
 	}, []string{"Developers"})
 	require.NoError(t, err)
+	require.True(t, acquired)
 	session := &sessions.Session{Values: map[interface{}]interface{}{
 		IDTokenClaimsSessionKey: `{
 			"iss": "https://issuer.example",
@@ -501,11 +502,12 @@ func TestUserFromSAMLSessionPendingProvisioningBlocksAuthentication(t *testing.T
 		FriendlyName: stringPtr("Old Name"),
 	})
 	provisioner := newOIDCSessionProvisionerForTest(t, authService)
-	_, err := provisioner.acquirePending(t.Context(), ExternalIdentity{
+	_, acquired, err := provisioner.createPending(t.Context(), ExternalIdentity{
 		ExternalID: "sam-user",
 		Source:     "saml",
 	}, []string{"Developers"})
 	require.NoError(t, err)
+	require.True(t, acquired)
 	session := &sessions.Session{Values: map[interface{}]interface{}{
 		SAMLTokenClaimsSessionKey: oidcencoding.Claims{
 			"external_id": "sam-user",

@@ -112,7 +112,7 @@ var runCmd = &cobra.Command{
 			logger.WithField("service", "external_identity_provisioner"),
 		)
 
-		authenticationService, err := authentication.NewAuthenticationService(ctx, cfg, authService, kvStore, logger)
+		authenticationService, err := authentication.NewAuthenticationService(ctx, cfg, authService, externalIdentityProvisioner, logger)
 		if err != nil {
 			logger.WithError(err).Fatal("failed to create authentication service")
 		}
