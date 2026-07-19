@@ -15,45 +15,48 @@ import (
 // ExternalIdentity is the protocol-neutral user identity resolved from a
 // verified external authentication exchange.
 type ExternalIdentity struct {
-	ExternalID        string
-	LegacyExternalIDs []string
-	Source            string
-	FriendlyName      string
-	Email             string
-	InitialGroups     []string
+	ExternalID   string
+	Source       string
+	FriendlyName string
+	Email        string
 }
 
 type ExternalIdentityProvisioningOptions struct {
 	PersistFriendlyName bool
 }
 
-// ResolveOrProvisionExternalUser resolves an existing lakeFS user by external
-// ID or provisions a new one. Initial groups are assigned only during first
-// provisioning; existing users keep their current email and group memberships.
-func ResolveOrProvisionExternalUser(ctx context.Context, logger logging.Logger, authService Service, identity ExternalIdentity, options ExternalIdentityProvisioningOptions) (*model.User, error) {
+// ResolveExternalUser resolves an existing lakeFS user by external ID. Existing
+// users keep their current email and group memberships; only the effective
+// friendly name may be updated.
+func ResolveExternalUser(ctx context.Context, logger logging.Logger, authService Service, identity ExternalIdentity, options ExternalIdentityProvisioningOptions) (*model.User, bool, error) {
+	if err := validateExternalIdentityID(identity); err != nil {
+		return nil, false, err
+	}
+	log := externalIdentityLog(logger, identity)
+	user, err := authService.GetUserByExternalID(ctx, identity.ExternalID)
+	if err == nil {
+		log.Info("Found user")
+		return enhanceExternalUserFriendlyName(ctx, user, identity.FriendlyName, options.PersistFriendlyName, authService, logger), true, nil
+	}
+	if errors.Is(err, ErrNotFound) {
+		return nil, false, nil
+	}
+	log.WithError(err).Error("Failed to get external user from database")
+	return nil, false, fmt.Errorf("get user by external ID: %w", err)
+}
+
+// ProvisionExternalUser creates a lakeFS user from a validated external
+// identity and assigns creation-only initial groups. If group assignment fails,
+// the newly created user is deleted best-effort before returning the error.
+func ProvisionExternalUser(ctx context.Context, logger logging.Logger, authService Service, identity ExternalIdentity, initialGroups []string, options ExternalIdentityProvisioningOptions) (*model.User, error) {
 	if err := validateExternalIdentityID(identity); err != nil {
 		return nil, err
 	}
-	if err := validateInitialGroups(identity.InitialGroups); err != nil {
+	if err := validateInitialGroups(initialGroups); err != nil {
 		return nil, err
 	}
 
-	log := logger.WithFields(logging.Fields{
-		"external_id":   identity.ExternalID,
-		"source":        identity.Source,
-		"friendly_name": identity.FriendlyName,
-	})
-
-	user, err := findExternalUser(ctx, authService, identity)
-	if err == nil {
-		log.Info("Found user")
-		return enhanceExternalUserFriendlyName(ctx, user, identity.FriendlyName, options.PersistFriendlyName, authService, logger), nil
-	}
-	if !errors.Is(err, ErrNotFound) {
-		log.WithError(err).Error("Failed to get external user from database")
-		return nil, fmt.Errorf("get user by external ID: %w", err)
-	}
-
+	log := externalIdentityLog(logger, identity)
 	log.Info("User not found; creating them")
 	newUser := model.User{
 		CreatedAt:  time.Now().UTC(),
@@ -81,7 +84,7 @@ func ResolveOrProvisionExternalUser(ctx context.Context, logger logging.Logger, 
 		return enhanceExternalUserFriendlyName(ctx, user, identity.FriendlyName, options.PersistFriendlyName, authService, logger), nil
 	}
 
-	if err := addInitialGroups(ctx, logger, authService, newUser.Username, identity.InitialGroups); err != nil {
+	if err := addInitialGroups(ctx, logger, authService, newUser.Username, initialGroups); err != nil {
 		if deleteErr := authService.DeleteUser(ctx, newUser.Username); deleteErr != nil {
 			return nil, errors.Join(
 				err,
@@ -94,21 +97,23 @@ func ResolveOrProvisionExternalUser(ctx context.Context, logger logging.Logger, 
 	return enhanceExternalUserFriendlyName(ctx, &newUser, identity.FriendlyName, false, authService, logger), nil
 }
 
-func findExternalUser(ctx context.Context, authService Service, identity ExternalIdentity) (*model.User, error) {
-	user, err := authService.GetUserByExternalID(ctx, identity.ExternalID)
-	if err == nil || !errors.Is(err, ErrNotFound) {
+// ResolveOrProvisionExternalUser resolves an existing lakeFS user by external
+// ID or provisions a new one. Initial groups are assigned only during first
+// provisioning.
+func ResolveOrProvisionExternalUser(ctx context.Context, logger logging.Logger, authService Service, identity ExternalIdentity, initialGroups []string, options ExternalIdentityProvisioningOptions) (*model.User, error) {
+	user, found, err := ResolveExternalUser(ctx, logger, authService, identity, options)
+	if err != nil || found {
 		return user, err
 	}
-	for _, legacyExternalID := range identity.LegacyExternalIDs {
-		if strings.TrimSpace(legacyExternalID) == "" || legacyExternalID == identity.ExternalID {
-			continue
-		}
-		user, err = authService.GetUserByExternalID(ctx, legacyExternalID)
-		if err == nil || !errors.Is(err, ErrNotFound) {
-			return user, err
-		}
-	}
-	return nil, ErrNotFound
+	return ProvisionExternalUser(ctx, logger, authService, identity, initialGroups, options)
+}
+
+func externalIdentityLog(logger logging.Logger, identity ExternalIdentity) logging.Logger {
+	return logger.WithFields(logging.Fields{
+		"external_id":   identity.ExternalID,
+		"source":        identity.Source,
+		"friendly_name": identity.FriendlyName,
+	})
 }
 
 func validateExternalIdentityID(identity ExternalIdentity) error {

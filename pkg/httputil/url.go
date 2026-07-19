@@ -35,8 +35,23 @@ func NormalizeBaseURL(raw string) (string, error) {
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", fmt.Errorf("base URL must not include query or fragment")
 	}
-	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.Host = normalizeBaseURLHost(parsed)
 	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+func normalizeBaseURLHost(parsed *url.URL) string {
+	host := strings.ToLower(parsed.Hostname())
+	port := parsed.Port()
+	if (parsed.Scheme == "https" && port == "443") || (parsed.Scheme == "http" && port == "80") {
+		port = ""
+	}
+	if port != "" {
+		return net.JoinHostPort(host, port)
+	}
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
 }
 
 func BaseURLUsesHTTPS(raw string) (bool, error) {

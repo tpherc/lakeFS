@@ -2,6 +2,8 @@ package authentication
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -125,7 +127,7 @@ func TestOIDCSessionSaveClaimsWritesCurrentAuthSchema(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, expiresAt.Unix(), loadedExpiresAt)
 
-	externalID := "alice"
+	externalID := oidcExternalIDForTest("https://issuer.example", "alice")
 	user, err := auth.UserFromOIDCSession(t.Context(), logging.Dummy(), &oidcRequestAuthService{
 		user: &model.User{
 			CreatedAt:  time.Now().UTC(),
@@ -136,6 +138,11 @@ func TestOIDCSessionSaveClaimsWritesCurrentAuthSchema(t *testing.T) {
 	}, loadedSession, &auth.OIDCConfig{})
 	require.NoError(t, err)
 	require.Equal(t, "alice", user.Username)
+}
+
+func oidcExternalIDForTest(issuer, subject string) string {
+	sum := sha256.Sum256([]byte(issuer + "\x00" + subject))
+	return "oidc:" + base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 type oidcRequestAuthService struct {

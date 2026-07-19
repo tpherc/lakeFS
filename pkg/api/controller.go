@@ -5472,15 +5472,6 @@ func newLoginConfig(c config.AuthConfig) *apigen.LoginConfig {
 	authUICfg := c.GetAuthUIConfig()
 	loginURL := authUICfg.LoginURL
 	loginURLMethod := c.GetLoginURLMethodConfigParam()
-	baseAuthCfg := c.GetBaseAuthConfig()
-	oidcConfigured := !baseAuthCfg.IsAuthenticationTypeAPI() && baseAuthCfg.Providers.OIDC.IsConfigured()
-	if oidcConfigured && loginURL == "" {
-		loginURL = authentication.OIDCLoginPath
-		loginURLMethod = authUICfg.LoginURLMethod
-		if loginURLMethod == "" {
-			loginURLMethod = config.AuthLoginURLMethodRedirect
-		}
-	}
 	loginConfig := &apigen.LoginConfig{
 		RBAC:               apiutil.Ptr(authUICfg.RBAC),
 		LoginUrl:           loginURL,

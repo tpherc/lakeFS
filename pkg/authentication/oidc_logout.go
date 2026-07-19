@@ -8,35 +8,28 @@ import (
 	"github.com/treeverse/lakefs/pkg/config"
 )
 
-type oidcLogoutRedirect struct {
-	endSessionEndpoint            string
-	clientID                      string
-	logoutEndpointQueryParameters []string
-	logoutClientIDQueryParameter  string
-}
-
-func newOIDCLogoutRedirect(providerConfig config.OIDCProvider, endSessionEndpoint string) oidcLogoutRedirect {
-	params := append([]string(nil), providerConfig.LogoutEndpointQueryParameters...)
-	return oidcLogoutRedirect{
-		endSessionEndpoint:            endSessionEndpoint,
-		clientID:                      providerConfig.ClientID,
-		logoutEndpointQueryParameters: params,
-		logoutClientIDQueryParameter:  providerConfig.LogoutClientIDQueryParameter,
-	}
-}
-
-func (r oidcLogoutRedirect) URL(fallbackURL string) (string, error) {
-	logoutURL := fallbackURL
-	if r.endSessionEndpoint != "" {
-		logoutURL = r.endSessionEndpoint
+func compileOIDCLogoutURL(rawLogoutURL string, providerConfig config.OIDCProvider) (string, error) {
+	logoutURL := strings.TrimSpace(rawLogoutURL)
+	if logoutURL == "" {
+		return "", fmt.Errorf("auth.logout_redirect_url is required for OIDC logout")
 	}
 	redirectURL, err := url.Parse(logoutURL)
 	if err != nil {
 		return "", fmt.Errorf("parse logout redirect URL: %w", err)
 	}
+	if redirectURL.IsAbs() {
+		if redirectURL.Scheme != "http" && redirectURL.Scheme != "https" {
+			return "", fmt.Errorf("auth.logout_redirect_url must use http or https")
+		}
+		if redirectURL.Host == "" {
+			return "", fmt.Errorf("auth.logout_redirect_url must include a host")
+		}
+	} else if !strings.HasPrefix(logoutURL, "/") || strings.HasPrefix(logoutURL, "//") {
+		return "", fmt.Errorf("auth.logout_redirect_url must be an absolute URL or root-relative path")
+	}
 	query := redirectURL.Query()
 
-	params := r.logoutEndpointQueryParameters
+	params := providerConfig.LogoutEndpointQueryParameters
 	if len(params)%2 != 0 {
 		return "", fmt.Errorf("auth.providers.oidc.logout_endpoint_query_parameters must contain key/value pairs")
 	}
@@ -47,8 +40,8 @@ func (r oidcLogoutRedirect) URL(fallbackURL string) (string, error) {
 		}
 		query.Set(key, params[i+1])
 	}
-	if key := strings.TrimSpace(r.logoutClientIDQueryParameter); key != "" {
-		query.Set(key, r.clientID)
+	if key := strings.TrimSpace(providerConfig.LogoutClientIDQueryParameter); key != "" {
+		query.Set(key, providerConfig.ClientID)
 	}
 
 	redirectURL.RawQuery = query.Encode()

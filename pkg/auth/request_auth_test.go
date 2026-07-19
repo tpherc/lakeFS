@@ -253,7 +253,7 @@ func TestUserFromOIDCSessionExistingUserUpdatesFriendlyNameWithoutInitialGroupCh
 			"iss": "https://issuer.example",
 			"sub": "bob",
 			"name": "Bob New",
-			"roles": "Admins"
+			"roles": ["Admins", 7]
 		}`,
 	}}
 	MarkOIDCSessionClaimsCurrent(session, time.Now().Add(time.Hour))
@@ -273,9 +273,9 @@ func TestUserFromOIDCSessionExistingUserUpdatesFriendlyNameWithoutInitialGroupCh
 	require.Equal(t, []friendlyNameUpdate{{username: "bob", friendlyName: "Bob New"}}, authService.friendlyNameUpdates)
 }
 
-func TestUserFromOIDCSessionFindsLegacyRawSubjectExternalID(t *testing.T) {
+func TestUserFromOIDCSessionDoesNotUseRawSubjectExternalID(t *testing.T) {
 	authService := newOIDCSessionAuthService(&model.User{
-		Username:     "legacy-bob",
+		Username:     "raw-subject-bob",
 		ExternalID:   stringPtr("legacy/bob"),
 		FriendlyName: stringPtr("Old Name"),
 		Source:       "oidc",
@@ -298,11 +298,12 @@ func TestUserFromOIDCSessionFindsLegacyRawSubjectExternalID(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, "legacy-bob", user.Username)
+	externalID := oidcExternalID("https://issuer.example", "legacy/bob")
+	require.Equal(t, externalID, user.Username)
 	require.Equal(t, "Bob New", stringValue(user.FriendlyName))
-	require.Empty(t, authService.createdUsers)
-	require.Empty(t, authService.addedGroups)
-	require.Equal(t, []friendlyNameUpdate{{username: "legacy-bob", friendlyName: "Bob New"}}, authService.friendlyNameUpdates)
+	require.Len(t, authService.createdUsers, 1)
+	require.Equal(t, []oidcGroupMembership{{username: externalID, groupID: "Admins"}}, authService.addedGroups)
+	require.Empty(t, authService.friendlyNameUpdates)
 }
 
 func TestUserFromOIDCSessionRequiredClaimMismatchDoesNotMutateUsers(t *testing.T) {
@@ -392,6 +393,78 @@ func TestUserFromSAMLSessionUsesFallbackSourceAndAssignsInitialGroups(t *testing
 		{username: "sam-user", groupID: "Developers"},
 		{username: "sam-user", groupID: "Viewers"},
 	}, authService.addedGroups)
+}
+
+func TestUserFromSAMLSessionValidatesInitialGroupsBeforeCreate(t *testing.T) {
+	authService := newOIDCSessionAuthService()
+	session := &sessions.Session{Values: map[interface{}]interface{}{
+		SAMLTokenClaimsSessionKey: oidcencoding.Claims{
+			"external_id": "sam-user",
+			"roles":       []any{"Developers", 7},
+		},
+	}}
+
+	user, err := UserFromSAMLSession(t.Context(), logging.ContextUnavailable(), authService, session, &CookieAuthConfig{
+		InitialGroupsClaimName:  "roles",
+		ExternalUserIDClaimName: "external_id",
+	})
+	require.ErrorIs(t, err, ErrAuthenticatingRequest)
+	require.Nil(t, user)
+	require.Empty(t, authService.createdUsers)
+	require.Empty(t, authService.addedGroups)
+}
+
+func TestUserFromSAMLSessionRollsBackUserAfterInitialGroupFailure(t *testing.T) {
+	authService := newOIDCSessionAuthService()
+	authService.addUserToGroupErr = ErrInternalServerError
+	session := &sessions.Session{Values: map[interface{}]interface{}{
+		SAMLTokenClaimsSessionKey: oidcencoding.Claims{
+			"external_id": "sam-user",
+			"roles":       []any{"Developers"},
+		},
+	}}
+
+	user, err := UserFromSAMLSession(t.Context(), logging.ContextUnavailable(), authService, session, &CookieAuthConfig{
+		InitialGroupsClaimName:  "roles",
+		ExternalUserIDClaimName: "external_id",
+	})
+	require.ErrorIs(t, err, ErrInternalServerError)
+	require.Nil(t, user)
+	require.Len(t, authService.createdUsers, 1)
+	require.Equal(t, []oidcGroupMembership{{username: "sam-user", groupID: "Developers"}}, authService.addedGroups)
+	require.Equal(t, []string{"sam-user"}, authService.deletedUsers)
+	_, getErr := authService.GetUserByExternalID(t.Context(), "sam-user")
+	require.ErrorIs(t, getErr, ErrNotFound)
+}
+
+func TestUserFromSAMLSessionExistingUserIgnoresMalformedInitialGroupClaim(t *testing.T) {
+	authService := newOIDCSessionAuthService(&model.User{
+		Username:     "sam-user",
+		ExternalID:   stringPtr("sam-user"),
+		Source:       "saml",
+		FriendlyName: stringPtr("Old Name"),
+	})
+	session := &sessions.Session{Values: map[interface{}]interface{}{
+		SAMLTokenClaimsSessionKey: oidcencoding.Claims{
+			"external_id": "sam-user",
+			"name":        "Sam New",
+			"roles":       []any{"Developers", 7},
+		},
+	}}
+
+	user, err := UserFromSAMLSession(t.Context(), logging.ContextUnavailable(), authService, session, &CookieAuthConfig{
+		InitialGroupsClaimName:  "roles",
+		FriendlyNameClaimName:   "name",
+		ExternalUserIDClaimName: "external_id",
+		PersistFriendlyName:     true,
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, "sam-user", user.Username)
+	require.Equal(t, "Sam New", stringValue(user.FriendlyName))
+	require.Empty(t, authService.createdUsers)
+	require.Empty(t, authService.addedGroups)
+	require.Equal(t, []friendlyNameUpdate{{username: "sam-user", friendlyName: "Sam New"}}, authService.friendlyNameUpdates)
 }
 
 func cloneUser(user *model.User) *model.User {

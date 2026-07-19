@@ -29,11 +29,15 @@ type OIDCService struct {
 	userClaimsConfig     config.OIDC
 	sessionDuration      time.Duration
 	postLoginRedirectURL string
-	logoutRedirect       oidcLogoutRedirect
+	logoutRedirectURL    string
 	logger               logging.Logger
 }
 
-func NewOIDCService(ctx context.Context, providerConfig config.OIDCProvider, userClaimsConfig config.OIDC, sessionDuration time.Duration, logger logging.Logger) (*OIDCService, error) {
+func NewOIDCService(ctx context.Context, providerConfig config.OIDCProvider, userClaimsConfig config.OIDC, sessionDuration time.Duration, logoutRedirectURL string, logger logging.Logger) (*OIDCService, error) {
+	compiledLogoutURL, err := compileOIDCLogoutURL(logoutRedirectURL, providerConfig)
+	if err != nil {
+		return nil, err
+	}
 	oidcClient, err := newCAPOIDCClient(ctx, providerConfig)
 	if err != nil {
 		return nil, err
@@ -49,7 +53,7 @@ func NewOIDCService(ctx context.Context, providerConfig config.OIDCProvider, use
 		userClaimsConfig:     userClaimsConfig,
 		sessionDuration:      sessionDuration,
 		postLoginRedirectURL: providerConfig.PostLoginRedirectURL,
-		logoutRedirect:       newOIDCLogoutRedirect(providerConfig, oidcClient.EndSessionEndpoint()),
+		logoutRedirectURL:    compiledLogoutURL,
 		logger:               logger.WithField("service", "oidc_authentication"),
 	}, nil
 }
@@ -71,8 +75,8 @@ func (s *OIDCService) ValidateSTS(_ context.Context, _, _, _ string) (string, er
 	return "", ErrNotImplemented
 }
 
-func (s *OIDCService) LogoutRedirectURL(_ context.Context, fallbackURL string) (string, error) {
-	return s.logoutRedirect.URL(fallbackURL)
+func (s *OIDCService) LogoutRedirectURL(_ context.Context, _ string) (string, error) {
+	return s.logoutRedirectURL, nil
 }
 
 func (s *OIDCService) RegisterAdditionalRoutes(r *chi.Mux, sessionStore sessions.Store) {

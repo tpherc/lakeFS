@@ -91,23 +91,28 @@ func UserFromSAMLSession(ctx context.Context, logger logging.Logger, authService
 	}
 	log = log.WithField("friendly_name", friendlyName)
 
+	authSource := strings.TrimSpace(cookieAuthConfig.AuthSource)
+	if authSource == "" {
+		authSource = defaultSAMLAuthSource
+	}
+	identity := ExternalIdentity{
+		ExternalID:   externalID,
+		Source:       authSource,
+		FriendlyName: friendlyName,
+	}
+	options := ExternalIdentityProvisioningOptions{PersistFriendlyName: cookieAuthConfig.PersistFriendlyName}
+	user, found, err := ResolveExternalUser(ctx, logger, authService, identity, options)
+	if err != nil || found {
+		return user, err
+	}
+
 	groupsClaim := idTokenClaims[cookieAuthConfig.InitialGroupsClaimName]
 	initialGroups, err := initialGroupsFromClaims(groupsClaim, cookieAuthConfig.DefaultInitialGroups)
 	if err != nil {
 		log.WithError(err).WithField("groups_claim", groupsClaim).Error("Failed to parse initial groups claim")
 		return nil, ErrAuthenticatingRequest
 	}
-
-	authSource := strings.TrimSpace(cookieAuthConfig.AuthSource)
-	if authSource == "" {
-		authSource = defaultSAMLAuthSource
-	}
-	return ResolveOrProvisionExternalUser(ctx, logger, authService, ExternalIdentity{
-		ExternalID:    externalID,
-		Source:        authSource,
-		FriendlyName:  friendlyName,
-		InitialGroups: initialGroups,
-	}, ExternalIdentityProvisioningOptions{PersistFriendlyName: cookieAuthConfig.PersistFriendlyName})
+	return ProvisionExternalUser(ctx, logger, authService, identity, initialGroups, options)
 }
 
 func UserFromOIDCSession(ctx context.Context, logger logging.Logger, authService Service, authSession *sessions.Session, oidcConfig *OIDCConfig) (*model.User, error) {
@@ -150,21 +155,26 @@ func UserFromOIDCSession(ctx context.Context, logger logging.Logger, authService
 	if oidcConfig.EmailClaimName != "" {
 		email, _ = idTokenClaims[oidcConfig.EmailClaimName].(string)
 	}
+
+	identity := ExternalIdentity{
+		ExternalID:   externalID,
+		Source:       oidcAuthSource,
+		FriendlyName: friendlyName,
+		Email:        email,
+	}
+	options := ExternalIdentityProvisioningOptions{PersistFriendlyName: oidcConfig.PersistFriendlyName}
+	user, found, err := ResolveExternalUser(ctx, logger, authService, identity, options)
+	if err != nil || found {
+		return user, err
+	}
+
 	groupsClaim := idTokenClaims[oidcConfig.InitialGroupsClaimName]
 	initialGroups, err := initialGroupsFromClaims(groupsClaim, oidcConfig.DefaultInitialGroups)
 	if err != nil {
 		logger.WithError(err).WithField("groups_claim", groupsClaim).Error("Failed to parse initial groups claim")
 		return nil, ErrAuthenticatingRequest
 	}
-
-	return ResolveOrProvisionExternalUser(ctx, logger, authService, ExternalIdentity{
-		ExternalID:        externalID,
-		LegacyExternalIDs: []string{subject},
-		Source:            oidcAuthSource,
-		FriendlyName:      friendlyName,
-		Email:             email,
-		InitialGroups:     initialGroups,
-	}, ExternalIdentityProvisioningOptions{PersistFriendlyName: oidcConfig.PersistFriendlyName})
+	return ProvisionExternalUser(ctx, logger, authService, identity, initialGroups, options)
 }
 
 // MarkOIDCSessionClaimsCurrent marks claims saved by the current normalized

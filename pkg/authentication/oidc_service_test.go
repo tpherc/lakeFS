@@ -204,6 +204,12 @@ func TestNormalizeOIDCClaimsRequiresIssuer(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestNewOIDCServiceRejectsInvalidLogoutURLBeforeProviderInitialization(t *testing.T) {
+	service, err := NewOIDCService(t.Context(), config.OIDCProvider{}, config.OIDC{}, time.Hour, "logout", logging.ContextUnavailable())
+	require.Error(t, err)
+	require.Nil(t, service)
+}
+
 func testOIDCService(client oidcProtocolClient, claimsConfig config.OIDC) *OIDCService {
 	callbacks, err := newOIDCCallbackResolver(config.OIDCProvider{CallbackBaseURL: "https://lakefs.example"})
 	if err != nil {
@@ -216,6 +222,7 @@ func testOIDCService(client oidcProtocolClient, claimsConfig config.OIDC) *OIDCS
 		sessionDuration:      time.Hour,
 		logger:               logging.ContextUnavailable(),
 		postLoginRedirectURL: "",
+		logoutRedirectURL:    "/auth/login",
 	}
 }
 
@@ -257,12 +264,11 @@ func sampleOIDCTransaction(redirectURI, next string) *oidcTransaction {
 }
 
 type fakeOIDCClient struct {
-	beginFunc          func(context.Context, oidcBeginLoginInput) (*oidcTransaction, string, error)
-	exchangeFunc       func(context.Context, *oidcTransaction, oidcCallbackInput) (encoding.Claims, error)
-	endSessionEndpoint string
-	beginCalls         int
-	exchangeCalls      int
-	closeCalled        bool
+	beginFunc     func(context.Context, oidcBeginLoginInput) (*oidcTransaction, string, error)
+	exchangeFunc  func(context.Context, *oidcTransaction, oidcCallbackInput) (encoding.Claims, error)
+	beginCalls    int
+	exchangeCalls int
+	closeCalled   bool
 }
 
 func (f *fakeOIDCClient) BeginLogin(ctx context.Context, input oidcBeginLoginInput) (*oidcTransaction, string, error) {
@@ -279,10 +285,6 @@ func (f *fakeOIDCClient) Exchange(ctx context.Context, transaction *oidcTransact
 		return nil, errors.New("unexpected Exchange")
 	}
 	return f.exchangeFunc(ctx, transaction, input)
-}
-
-func (f *fakeOIDCClient) EndSessionEndpoint() string {
-	return f.endSessionEndpoint
 }
 
 func (f *fakeOIDCClient) Close() {

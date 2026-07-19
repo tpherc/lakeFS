@@ -20,10 +20,11 @@ func TestOIDCSessionReissueOnlyWhenEncodingUpgradeNeeded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	externalID := "oidc-user"
+	username := "oidc-user"
+	externalID := oidcExternalIDForTest("https://issuer.example", username)
 	authService := oidcMiddlewareAuthService{
 		user: &model.User{
-			Username:   externalID,
+			Username:   username,
 			ExternalID: &externalID,
 			Source:     "oidc",
 		},
@@ -82,7 +83,7 @@ func TestOIDCSessionReissueOnlyWhenEncodingUpgradeNeeded(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if user == nil || user.Username != externalID {
+		if user == nil || user.Username != username {
 			t.Fatalf("unexpected user: %#v", user)
 		}
 		if cookie := responseCookieByName(t, gotRec.Result(), auth.OIDCAuthSessionName); cookie != nil {

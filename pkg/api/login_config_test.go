@@ -14,8 +14,22 @@ import (
 	"github.com/treeverse/lakefs/pkg/config"
 )
 
-func TestNewLoginConfigUsesOIDCAsPrimaryLoginURL(t *testing.T) {
+func TestNewLoginConfigDoesNotUseOIDCAsImplicitLoginURL(t *testing.T) {
 	authConfig := &config.Auth{}
+	authConfig.Providers.OIDC = validLoginConfigOIDCProvider()
+
+	loginConfig := newLoginConfig(authConfig)
+
+	require.Empty(t, loginConfig.LoginUrl)
+	require.NotNil(t, loginConfig.LoginUrlMethod)
+	require.Equal(t, "none", *loginConfig.LoginUrlMethod)
+	require.False(t, slices.Contains(loginConfig.LoginCookieNames, auth.OIDCAuthSessionName))
+	require.Nil(t, loginConfig.FallbackLoginUrl)
+}
+
+func TestNewLoginConfigExplicitOIDCLoginURLDefaultsToRedirect(t *testing.T) {
+	authConfig := &config.Auth{}
+	authConfig.LoginURL = authentication.OIDCLoginPath
 	authConfig.Providers.OIDC = validLoginConfigOIDCProvider()
 
 	loginConfig := newLoginConfig(authConfig)
@@ -23,20 +37,6 @@ func TestNewLoginConfigUsesOIDCAsPrimaryLoginURL(t *testing.T) {
 	require.Equal(t, authentication.OIDCLoginPath, loginConfig.LoginUrl)
 	require.NotNil(t, loginConfig.LoginUrlMethod)
 	require.Equal(t, config.AuthLoginURLMethodRedirect, *loginConfig.LoginUrlMethod)
-	require.False(t, slices.Contains(loginConfig.LoginCookieNames, auth.OIDCAuthSessionName))
-	require.Nil(t, loginConfig.FallbackLoginUrl)
-}
-
-func TestNewLoginConfigUsesOIDCSelectMode(t *testing.T) {
-	authConfig := &config.Auth{}
-	authConfig.LoginURLMethod = config.AuthLoginURLMethodSelect
-	authConfig.Providers.OIDC = validLoginConfigOIDCProvider()
-
-	loginConfig := newLoginConfig(authConfig)
-
-	require.Equal(t, authentication.OIDCLoginPath, loginConfig.LoginUrl)
-	require.NotNil(t, loginConfig.LoginUrlMethod)
-	require.Equal(t, config.AuthLoginURLMethodSelect, *loginConfig.LoginUrlMethod)
 }
 
 func TestNewLoginConfigPreservesExplicitLoginURL(t *testing.T) {

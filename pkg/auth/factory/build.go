@@ -16,12 +16,16 @@ import (
 var (
 	errSimplifiedOrExternalAuth = errors.New("cannot set auth.ui_config.rbac to non-simplified without setting an external auth service")
 	errAmbiguousLocalRBAC       = errors.New("auth.ui_config.rbac internal with features.local_rbac enabled cannot also configure auth.api.endpoint")
+	errOIDCRequiresLocalAuth    = errors.New("auth.providers.oidc requires a provisioning-capable auth.ui_config.rbac mode")
 )
 
 func checkAuthModeSupport(authCfg config.AuthConfig, localRBAC bool) error {
 	baseAuthCfg := authCfg.GetBaseAuthConfig()
 	authUICfg := authCfg.GetAuthUIConfig()
 
+	if baseAuthCfg.Providers.OIDC.IsConfigured() && authUICfg.IsAuthBasic() {
+		return errOIDCRequiresLocalAuth
+	}
 	if authUICfg.IsAuthBasic() {
 		return nil
 	}

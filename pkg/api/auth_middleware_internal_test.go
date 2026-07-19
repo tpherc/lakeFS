@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -69,6 +71,9 @@ func TestCheckSecurityRequirementsContinuesPastCorruptCookieSessions(t *testing.
 			req.AddCookie(tt.validSession)
 			rec := httptest.NewRecorder()
 			authService := newMiddlewareAuthService(tt.expectedUser)
+			if tt.oidcConfig != nil && tt.validSession != nil && tt.validSession.Name == auth.OIDCAuthSessionName {
+				authService = newOIDCMiddlewareAuthService(tt.expectedUser)
+			}
 
 			user, err := checkSecurityRequirements(rec, req, tt.requirements, logging.Dummy(), nil, authService, store, tt.oidcConfig, tt.cookieAuthConfig)
 
@@ -98,7 +103,7 @@ func TestCheckSecurityRequirementsReturnsStoreErrorsImmediately(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/repositories", nil)
 	rec := httptest.NewRecorder()
 
-	user, err := checkSecurityRequirements(rec, req, authSecurityRequirements("cookie_auth", "oidc_auth"), logging.Dummy(), nil, newMiddlewareAuthService("oidc-user"), store, &auth.OIDCConfig{}, nil)
+	user, err := checkSecurityRequirements(rec, req, authSecurityRequirements("cookie_auth", "oidc_auth"), logging.Dummy(), nil, newOIDCMiddlewareAuthService("oidc-user"), store, &auth.OIDCConfig{}, nil)
 
 	require.Nil(t, user)
 	require.ErrorIs(t, err, storeErr)
@@ -112,7 +117,7 @@ func TestCheckSecurityRequirementsRejectsHistoricalOIDCSession(t *testing.T) {
 	req.AddCookie(oidcSessionCookie(t, store, "oidc-user", false))
 	rec := httptest.NewRecorder()
 
-	user, err := checkSecurityRequirements(rec, req, authSecurityRequirements("oidc_auth"), logging.Dummy(), nil, newMiddlewareAuthService("oidc-user"), store, &auth.OIDCConfig{}, nil)
+	user, err := checkSecurityRequirements(rec, req, authSecurityRequirements("oidc_auth"), logging.Dummy(), nil, newOIDCMiddlewareAuthService("oidc-user"), store, &auth.OIDCConfig{}, nil)
 
 	require.Nil(t, user)
 	require.ErrorIs(t, err, auth.ErrAuthenticatingRequest)
@@ -125,7 +130,7 @@ func TestCheckSecurityRequirementsRejectsExpiredOIDCSession(t *testing.T) {
 	req.AddCookie(oidcSessionCookieWithExpiry(t, store, "oidc-user", time.Now().Add(-time.Second)))
 	rec := httptest.NewRecorder()
 
-	user, err := checkSecurityRequirements(rec, req, authSecurityRequirements("oidc_auth"), logging.Dummy(), nil, newMiddlewareAuthService("oidc-user"), store, &auth.OIDCConfig{}, nil)
+	user, err := checkSecurityRequirements(rec, req, authSecurityRequirements("oidc_auth"), logging.Dummy(), nil, newOIDCMiddlewareAuthService("oidc-user"), store, &auth.OIDCConfig{}, nil)
 
 	require.Nil(t, user)
 	require.ErrorIs(t, err, auth.ErrAuthenticatingRequest)
@@ -172,6 +177,11 @@ func oidcSessionCookieWithExpiry(t testing.TB, store sessions.Store, username st
 			auth.MarkOIDCSessionClaimsCurrent(session, expiresAt)
 		}
 	})
+}
+
+func oidcExternalIDForTest(issuer, subject string) string {
+	sum := sha256.Sum256([]byte(issuer + "\x00" + subject))
+	return "oidc:" + base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func samlSessionCookie(t testing.TB, store sessions.Store, username string) *http.Cookie {
@@ -240,6 +250,20 @@ func newMiddlewareAuthService(usernames ...string) *middlewareAuthService {
 		service.usersByExternalID[username] = user
 		service.usersByUsername[username] = user
 	}
+	return service
+}
+
+func newOIDCMiddlewareAuthService(username string) *middlewareAuthService {
+	service := newMiddlewareAuthService()
+	externalID := oidcExternalIDForTest("https://issuer.example", username)
+	user := &model.User{
+		CreatedAt:  time.Now().UTC(),
+		Username:   username,
+		ExternalID: &externalID,
+		Source:     "oidc",
+	}
+	service.usersByExternalID[externalID] = user
+	service.usersByUsername[username] = user
 	return service
 }
 

@@ -105,16 +105,15 @@ func (s *externalIdentityAuthService) UpdateUserFriendlyName(_ context.Context, 
 	return nil
 }
 
-func TestResolveOrProvisionExternalUserCreatesUserAndAssignsInitialGroups(t *testing.T) {
+func TestProvisionExternalUserCreatesUserAndAssignsInitialGroups(t *testing.T) {
 	authService := newExternalIdentityAuthService()
 
-	user, err := ResolveOrProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
-		ExternalID:    "alice",
-		Source:        "oidc",
-		FriendlyName:  "Alice Example",
-		Email:         "alice@example.com",
-		InitialGroups: []string{"Developers", "Viewers"},
-	}, ExternalIdentityProvisioningOptions{PersistFriendlyName: true})
+	user, err := ProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
+		ExternalID:   "alice",
+		Source:       "oidc",
+		FriendlyName: "Alice Example",
+		Email:        "alice@example.com",
+	}, []string{"Developers", "Viewers"}, ExternalIdentityProvisioningOptions{PersistFriendlyName: true})
 	require.NoError(t, err)
 
 	require.Equal(t, "alice", user.Username)
@@ -138,7 +137,7 @@ func TestResolveOrProvisionExternalUserCreatesUserAndAssignsInitialGroups(t *tes
 	require.Empty(t, authService.deletedUsers)
 }
 
-func TestResolveOrProvisionExternalUserExistingUserUpdatesFriendlyNameOnly(t *testing.T) {
+func TestResolveExternalUserExistingUserUpdatesFriendlyNameOnly(t *testing.T) {
 	authService := newExternalIdentityAuthService(&model.User{
 		Username:     "bob",
 		ExternalID:   stringPtr("bob"),
@@ -147,14 +146,14 @@ func TestResolveOrProvisionExternalUserExistingUserUpdatesFriendlyNameOnly(t *te
 		Email:        stringPtr("old@example.com"),
 	})
 
-	user, err := ResolveOrProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
-		ExternalID:    "bob",
-		Source:        "oidc",
-		FriendlyName:  "Bob New",
-		Email:         "new@example.com",
-		InitialGroups: []string{"Admins"},
+	user, found, err := ResolveExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
+		ExternalID:   "bob",
+		Source:       "oidc",
+		FriendlyName: "Bob New",
+		Email:        "new@example.com",
 	}, ExternalIdentityProvisioningOptions{PersistFriendlyName: true})
 	require.NoError(t, err)
+	require.True(t, found)
 
 	require.Equal(t, "bob", user.Username)
 	require.Equal(t, "Bob New", stringValue(user.FriendlyName))
@@ -164,39 +163,31 @@ func TestResolveOrProvisionExternalUserExistingUserUpdatesFriendlyNameOnly(t *te
 	require.Equal(t, []externalFriendlyNameUpdate{{username: "bob", friendlyName: "Bob New"}}, authService.friendlyNameUpdates)
 }
 
-func TestResolveOrProvisionExternalUserFindsLegacyExternalID(t *testing.T) {
-	authService := newExternalIdentityAuthService(&model.User{
-		Username:     "legacy-alice",
-		ExternalID:   stringPtr("alice"),
-		Source:       "oidc",
-		FriendlyName: stringPtr("Old Name"),
-	})
-
-	user, err := ResolveOrProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
-		ExternalID:        "oidc:hashed-alice",
-		LegacyExternalIDs: []string{"alice"},
-		Source:            "oidc",
-		FriendlyName:      "Alice New",
-		InitialGroups:     []string{"Developers"},
-	}, ExternalIdentityProvisioningOptions{PersistFriendlyName: true})
-	require.NoError(t, err)
-
-	require.Equal(t, "legacy-alice", user.Username)
-	require.Equal(t, "Alice New", stringValue(user.FriendlyName))
-	require.Equal(t, 2, authService.getUserCalls)
-	require.Empty(t, authService.createRequests)
-	require.Empty(t, authService.addedGroups)
-	require.Equal(t, []externalFriendlyNameUpdate{{username: "legacy-alice", friendlyName: "Alice New"}}, authService.friendlyNameUpdates)
-}
-
-func TestResolveOrProvisionExternalUserReturnsFriendlyNameWithoutPersisting(t *testing.T) {
+func TestResolveExternalUserNotFoundDoesNotMutate(t *testing.T) {
 	authService := newExternalIdentityAuthService()
 
-	user, err := ResolveOrProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
+	user, found, err := ResolveExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
+		ExternalID:   "alice",
+		Source:       "oidc",
+		FriendlyName: "Alice New",
+		Email:        "alice@example.com",
+	}, ExternalIdentityProvisioningOptions{PersistFriendlyName: true})
+	require.NoError(t, err)
+	require.False(t, found)
+	require.Nil(t, user)
+	require.Empty(t, authService.createRequests)
+	require.Empty(t, authService.addedGroups)
+	require.Empty(t, authService.friendlyNameUpdates)
+}
+
+func TestProvisionExternalUserReturnsFriendlyNameWithoutPersisting(t *testing.T) {
+	authService := newExternalIdentityAuthService()
+
+	user, err := ProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
 		ExternalID:   "brenda",
 		Source:       "oidc",
 		FriendlyName: "Brenda Viewer",
-	}, ExternalIdentityProvisioningOptions{PersistFriendlyName: false})
+	}, nil, ExternalIdentityProvisioningOptions{PersistFriendlyName: false})
 	require.NoError(t, err)
 
 	require.Equal(t, "Brenda Viewer", stringValue(user.FriendlyName))
@@ -205,7 +196,7 @@ func TestResolveOrProvisionExternalUserReturnsFriendlyNameWithoutPersisting(t *t
 	require.Empty(t, authService.friendlyNameUpdates)
 }
 
-func TestResolveOrProvisionExternalUserCreateRaceFetchesWinner(t *testing.T) {
+func TestProvisionExternalUserCreateRaceFetchesWinner(t *testing.T) {
 	authService := newExternalIdentityAuthService()
 	authService.createUserErr = ErrAlreadyExists
 	authService.createRaceWinner = &model.User{
@@ -215,12 +206,11 @@ func TestResolveOrProvisionExternalUserCreateRaceFetchesWinner(t *testing.T) {
 		FriendlyName: stringPtr("Carol Winner"),
 	}
 
-	user, err := ResolveOrProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
-		ExternalID:    "carol",
-		Source:        "oidc",
-		FriendlyName:  "Carol Winner",
-		InitialGroups: []string{"Developers"},
-	}, ExternalIdentityProvisioningOptions{PersistFriendlyName: true})
+	user, err := ProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
+		ExternalID:   "carol",
+		Source:       "oidc",
+		FriendlyName: "Carol Winner",
+	}, []string{"Developers"}, ExternalIdentityProvisioningOptions{PersistFriendlyName: true})
 	require.NoError(t, err)
 
 	require.Equal(t, "race-winner", user.Username)
@@ -229,15 +219,14 @@ func TestResolveOrProvisionExternalUserCreateRaceFetchesWinner(t *testing.T) {
 	require.Empty(t, authService.deletedUsers)
 }
 
-func TestResolveOrProvisionExternalUserGroupAlreadyExistsIsSuccess(t *testing.T) {
+func TestProvisionExternalUserGroupAlreadyExistsIsSuccess(t *testing.T) {
 	authService := newExternalIdentityAuthService()
 	authService.addUserToGroupErr = ErrAlreadyExists
 
-	user, err := ResolveOrProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
-		ExternalID:    "dave",
-		Source:        "oidc",
-		InitialGroups: []string{"Developers"},
-	}, ExternalIdentityProvisioningOptions{})
+	user, err := ProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
+		ExternalID: "dave",
+		Source:     "oidc",
+	}, []string{"Developers"}, ExternalIdentityProvisioningOptions{})
 	require.NoError(t, err)
 
 	require.Equal(t, "dave", user.Username)
@@ -245,16 +234,15 @@ func TestResolveOrProvisionExternalUserGroupAlreadyExistsIsSuccess(t *testing.T)
 	require.Empty(t, authService.deletedUsers)
 }
 
-func TestResolveOrProvisionExternalUserGroupFailureRollsBackUser(t *testing.T) {
+func TestProvisionExternalUserGroupFailureRollsBackUser(t *testing.T) {
 	authService := newExternalIdentityAuthService()
 	addErr := errors.New("add group failed")
 	authService.addUserToGroupErr = addErr
 
-	user, err := ResolveOrProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
-		ExternalID:    "erin",
-		Source:        "oidc",
-		InitialGroups: []string{"Developers"},
-	}, ExternalIdentityProvisioningOptions{})
+	user, err := ProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
+		ExternalID: "erin",
+		Source:     "oidc",
+	}, []string{"Developers"}, ExternalIdentityProvisioningOptions{})
 	require.ErrorIs(t, err, addErr)
 	require.Nil(t, user)
 	require.Len(t, authService.createRequests, 1)
@@ -264,18 +252,17 @@ func TestResolveOrProvisionExternalUserGroupFailureRollsBackUser(t *testing.T) {
 	require.ErrorIs(t, getErr, ErrNotFound)
 }
 
-func TestResolveOrProvisionExternalUserRollbackFailureReturnsBothErrors(t *testing.T) {
+func TestProvisionExternalUserRollbackFailureReturnsBothErrors(t *testing.T) {
 	authService := newExternalIdentityAuthService()
 	addErr := errors.New("add group failed")
 	deleteErr := errors.New("delete user failed")
 	authService.addUserToGroupErr = addErr
 	authService.deleteUserErr = deleteErr
 
-	user, err := ResolveOrProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
-		ExternalID:    "frank",
-		Source:        "oidc",
-		InitialGroups: []string{"Developers"},
-	}, ExternalIdentityProvisioningOptions{})
+	user, err := ProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
+		ExternalID: "frank",
+		Source:     "oidc",
+	}, []string{"Developers"}, ExternalIdentityProvisioningOptions{})
 	require.ErrorIs(t, err, addErr)
 	require.ErrorIs(t, err, deleteErr)
 	require.Nil(t, user)
@@ -284,7 +271,7 @@ func TestResolveOrProvisionExternalUserRollbackFailureReturnsBothErrors(t *testi
 	require.NoError(t, getErr)
 }
 
-func TestResolveOrProvisionExternalUserInvalidIdentityDoesNotMutate(t *testing.T) {
+func TestResolveExternalUserInvalidIdentityDoesNotMutate(t *testing.T) {
 	tests := []struct {
 		name     string
 		identity ExternalIdentity
@@ -301,29 +288,41 @@ func TestResolveOrProvisionExternalUserInvalidIdentityDoesNotMutate(t *testing.T
 				ExternalID: "grace",
 			},
 		},
-		{
-			name: "empty group",
-			identity: ExternalIdentity{
-				ExternalID:    "heidi",
-				Source:        "oidc",
-				InitialGroups: []string{"Developers", ""},
-			},
-		},
-		{
-			name: "whitespace group",
-			identity: ExternalIdentity{
-				ExternalID:    "ivan",
-				Source:        "oidc",
-				InitialGroups: []string{" \t"},
-			},
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			authService := newExternalIdentityAuthService()
 
-			user, err := ResolveOrProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, tt.identity, ExternalIdentityProvisioningOptions{})
+			user, found, err := ResolveExternalUser(t.Context(), logging.ContextUnavailable(), authService, tt.identity, ExternalIdentityProvisioningOptions{})
+			require.ErrorIs(t, err, ErrAuthenticatingRequest)
+			require.False(t, found)
+			require.Nil(t, user)
+			require.Empty(t, authService.createRequests)
+			require.Empty(t, authService.addedGroups)
+			require.Empty(t, authService.deletedUsers)
+			require.Empty(t, authService.friendlyNameUpdates)
+		})
+	}
+}
+
+func TestProvisionExternalUserInvalidGroupsDoesNotMutate(t *testing.T) {
+	tests := []struct {
+		name   string
+		groups []string
+	}{
+		{name: "empty group", groups: []string{"Developers", ""}},
+		{name: "whitespace group", groups: []string{" \t"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			authService := newExternalIdentityAuthService()
+
+			user, err := ProvisionExternalUser(t.Context(), logging.ContextUnavailable(), authService, ExternalIdentity{
+				ExternalID: "heidi",
+				Source:     "oidc",
+			}, tt.groups, ExternalIdentityProvisioningOptions{})
 			require.ErrorIs(t, err, ErrAuthenticatingRequest)
 			require.Nil(t, user)
 			require.Empty(t, authService.createRequests)
