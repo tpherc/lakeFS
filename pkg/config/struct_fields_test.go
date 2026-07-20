@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/treeverse/lakefs/pkg/config"
@@ -142,6 +143,69 @@ func TestMapLoggingFields(t *testing.T) {
 		vString := fmt.Sprint(v)
 		if vString != expectedString {
 			t.Errorf("Value for '%s' is '%s', expected '%s'", k, vString, expectedString)
+		}
+	}
+}
+
+func TestMapLoggingFieldsSkipsUnexportedFields(t *testing.T) {
+	t.Parallel()
+	value := struct {
+		Visible string `mapstructure:"visible"`
+		hidden  string `mapstructure:"hidden"`
+	}{
+		Visible: "logged",
+		hidden:  "not logged",
+	}
+
+	fields := config.MapLoggingFields(value)
+
+	if fmt.Sprint(fields["visible"]) != "logged" {
+		t.Fatalf("visible field is %q, expected %q", fields["visible"], "logged")
+	}
+	if _, ok := fields["hidden"]; ok {
+		t.Fatal("unexported field should not be logged")
+	}
+}
+
+func TestMapLoggingFieldsSkipsInternalMultiStorageState(t *testing.T) {
+	cfg, err := buildConfigFromYAML(t, `
+database:
+  type: local
+auth:
+  encrypt:
+    secret_key: auth-secret
+blockstores:
+  signing:
+    secret_key: signing-secret
+  stores:
+    - id: alpha
+      type: mem
+      backward_compatible: true
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	storageConfig := cfg.StorageConfig()
+	if !storageConfig.IsMultiStorage() {
+		t.Fatal("expected resolved multi-storage configuration")
+	}
+	storageIDs := storageConfig.GetStorageIDs()
+	if len(storageIDs) != 1 || storageIDs[0] != "alpha" {
+		t.Fatalf("storage IDs are %v, expected [alpha]", storageIDs)
+	}
+
+	fields := config.MapLoggingFields(cfg.GetBaseConfig())
+
+	if fmt.Sprint(fields["blockstore.signing.secret_key"]) != config.FieldMaskedValue {
+		t.Fatalf("signing secret is %q, expected masked value", fields["blockstore.signing.secret_key"])
+	}
+	for key := range fields {
+		if strings.Contains(key, "storages") ||
+			strings.Contains(key, "storageids") ||
+			strings.Contains(key, "compatiblestorageid") ||
+			strings.Contains(key, "storageid") {
+			t.Fatalf("internal storage registry field %q should not be logged", key)
 		}
 	}
 }
