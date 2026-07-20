@@ -42,6 +42,10 @@ func structFieldsFunc(value reflect.Value, tag, squashValue string, prefix []str
 	// Scan the struct and
 	for i := 0; i < value.NumField(); i++ {
 		fieldType := value.Type().Field(i)
+		fieldValue := value.Field(i)
+		if !fieldValue.CanInterface() {
+			continue
+		}
 		var (
 			// fieldName is the name to use for the field
 			fieldName string
@@ -61,7 +65,6 @@ func structFieldsFunc(value reflect.Value, tag, squashValue string, prefix []str
 		if !squash {
 			prefix = append(prefix, fieldName)
 		}
-		fieldValue := value.Field(i)
 
 		switch fieldValue.Interface().(type) {
 		case SecureString:
