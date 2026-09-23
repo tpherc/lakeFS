@@ -9,6 +9,7 @@ import (
 	"runtime/trace"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/treeverse/lakefs/pkg/auth"
 	"github.com/treeverse/lakefs/pkg/block"
@@ -218,7 +219,31 @@ func PathOperationHandler(sc *ServerContext, handler operations.PathOperationHan
 			return
 		}
 
-		authOp := authorize(w, req, sc.authService, perms)
+		var objectRead *operations.ObjectReadSnapshot
+		var authorizer auth.Authorizer = sc.authService
+		if reader, ok := handler.(operations.ObjectReadHandler); ok {
+			readPath, pathErr := reader.ReadObjectPath(req, repo.Name, refID, path)
+			if pathErr != nil {
+				_ = o.EncodeError(w, req, pathErr, gatewayerrors.ErrInvalidCopySource.ToAPIErr())
+				return
+			}
+			if readPath != nil {
+				prepared := prepareObjectReadAuthorization(w, req, sc.authService, perms)
+				if prepared == nil {
+					return
+				}
+				authorizer = prepared
+				beforeMeta := time.Now()
+				entry, entryErr := sc.catalog.GetEntry(ctx, readPath.Repo, readPath.Reference, readPath.Path, catalog.GetEntryParams{})
+				o.Log(req).WithField("took", time.Since(beforeMeta)).WithError(entryErr).Debug("metadata operation to retrieve object done")
+				objectRead = &operations.ObjectReadSnapshot{Path: *readPath, Entry: entry, Err: entryErr}
+				if entryErr == nil {
+					addObjectReadMetadata(&perms, permissions.ObjectArn(readPath.Repo, readPath.Path), entry.Metadata)
+				}
+			}
+		}
+
+		authOp := authorize(w, req, authorizer, perms)
 		if authOp == nil {
 			return
 		}
@@ -233,7 +258,8 @@ func PathOperationHandler(sc *ServerContext, handler operations.PathOperationHan
 				},
 				Reference: refID,
 			},
-			Path: path,
+			Path:       path,
+			ObjectRead: objectRead,
 		}
 		req = req.WithContext(logging.AddFields(ctx, logging.Fields{
 			logging.RepositoryFieldKey:  repo.Name,
@@ -245,7 +271,38 @@ func PathOperationHandler(sc *ServerContext, handler operations.PathOperationHan
 	})
 }
 
-func authorize(w http.ResponseWriter, req *http.Request, authService auth.GatewayService, perms permissions.Node) *operations.AuthorizedOperation {
+func prepareObjectReadAuthorization(w http.ResponseWriter, req *http.Request, service auth.GatewayService, perms permissions.Node) *auth.PreparedAuthorization {
+	o := req.Context().Value(ContextKeyOperation).(*operations.Operation)
+	user, err := auth.GetUser(req.Context())
+	if err != nil {
+		o.Log(req).WithError(err).Error("failed to authorize, get user")
+		_ = o.EncodeError(w, req, err, gatewayerrors.ErrInternalError.ToAPIErr())
+		return nil
+	}
+	prepared, err := auth.PrepareAuthorization(req.Context(), service, user.Username)
+	if err != nil {
+		o.Log(req).WithError(err).Error("failed to load authorization policies")
+		_ = o.EncodeError(w, req, err, gatewayerrors.ErrInternalError.ToAPIErr())
+		return nil
+	}
+	if !prepared.CanAuthorize(perms) {
+		o.Log(req).Warn("no permission")
+		_ = o.EncodeError(w, req, nil, gatewayerrors.ErrAccessDenied.ToAPIErr())
+		return nil
+	}
+	return prepared
+}
+
+func addObjectReadMetadata(node *permissions.Node, resource string, metadata map[string]string) {
+	if node.Permission.Action == permissions.ReadObjectAction && node.Permission.Resource == resource {
+		node.Permission.ObjectMetadata = metadata
+	}
+	for i := range node.Nodes {
+		addObjectReadMetadata(&node.Nodes[i], resource, metadata)
+	}
+}
+
+func authorize(w http.ResponseWriter, req *http.Request, authService auth.Authorizer, perms permissions.Node) *operations.AuthorizedOperation {
 	ctx := req.Context()
 	o := ctx.Value(ContextKeyOperation).(*operations.Operation)
 	user, err := auth.GetUser(ctx)

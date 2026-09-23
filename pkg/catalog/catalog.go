@@ -708,9 +708,14 @@ func (c *Catalog) ListRepositories(ctx context.Context, limit int, prefix, searc
 		if record.RepositoryID == afterRepositoryID {
 			continue
 		}
-		// Apply permission filter if provided
-		if options.FilterFunc != nil && !options.FilterFunc(string(record.RepositoryID)) {
-			continue
+		if options.FilterFunc != nil {
+			include, err := options.FilterFunc(string(record.RepositoryID))
+			if err != nil {
+				return nil, false, fmt.Errorf("filter repository: %w", err)
+			}
+			if !include {
+				continue
+			}
 		}
 		repos = append(repos, &Repository{
 			Name:             record.RepositoryID.String(),
@@ -2255,7 +2260,7 @@ func (c *Catalog) RunBackgroundTaskSteps(ctx context.Context, repository *gravel
 	// Background context that persists after HTTP request completes
 	taskCtx := context.Background()
 	taskCtx = httputil.CopyRequestIDFromContext(ctx, taskCtx)
-	taskCtx = auth.CopyUserFromContext(ctx, taskCtx)
+	taskCtx = auth.CopyAuthorizationContext(ctx, taskCtx)
 	taskCtx = logging.CopyFieldsFromContext(ctx, taskCtx)
 
 	log := c.log(ctx).WithFields(logging.Fields{"task_id": taskID, "repository": repository.RepositoryID})
@@ -3075,20 +3080,22 @@ func (c *Catalog) cloneEntry(ctx context.Context, srcRepo *Repository, srcRef st
 
 	// copy the metadata into a new entry
 	dstEntry := *srcEntry
+	dstEntry.Metadata = maps.Clone(srcEntry.Metadata)
 	dstEntry.Path = destPath
 	dstEntry.CreationDate = time.Now()
 	srcMetaValue := srcEntry.Path
-	if dstEntry.Metadata == nil {
-		dstEntry.Metadata = make(map[string]string)
-	} else if value, ok := dstEntry.Metadata[apiutil.CloneMetadataKey]; ok {
+	if value, ok := srcEntry.Metadata[apiutil.CloneMetadataKey]; ok {
 		// Check if src is also a shallow copy before replacing metadata
 		srcMetaValue = value
 	}
 
 	if replaceSrcMetadata {
-		dstEntry.Metadata = metadata
+		dstEntry.Metadata = maps.Clone(metadata)
 	}
 
+	if dstEntry.Metadata == nil {
+		dstEntry.Metadata = make(Metadata)
+	}
 	dstEntry.Metadata[apiutil.CloneMetadataKey] = srcMetaValue
 
 	if err := c.CreateEntry(ctx, destRepository, destBranch, dstEntry, opts...); err != nil {
@@ -3102,13 +3109,17 @@ func (c *Catalog) cloneEntry(ctx context.Context, srcRepo *Repository, srcRef st
 // if replaceSrcMetadata is true, the metadata will be replaced with the provided metadata.
 // if replaceSrcMetadata is false, the metadata will be copied from the source entry.
 func (c *Catalog) CopyEntry(ctx context.Context, srcRepository, srcRef, srcPath, destRepository, destBranch, destPath string, replaceSrcMetadata bool, metadata Metadata, opts ...graveler.SetOptionsFunc) (*DBEntry, error) {
-	// copyObjectFull copy data from srcEntry's physical address (if set) or srcPath into destPath
-	// fetch src entry if needed - optimization in case we already have the entry
 	srcEntry, err := c.GetEntry(ctx, srcRepository, srcRef, srcPath, GetEntryParams{})
 	if err != nil {
 		return nil, err
 	}
 
+	return c.CopyEntryFromSnapshot(ctx, srcRepository, srcRef, srcEntry, destRepository, destBranch, destPath, replaceSrcMetadata, metadata, opts...)
+}
+
+// CopyEntryFromSnapshot copies the source entry already loaded and authorized by the caller.
+// It does not resolve the source path again, so a concurrent branch update cannot change the copied object.
+func (c *Catalog) CopyEntryFromSnapshot(ctx context.Context, srcRepository, srcRef string, srcEntry *DBEntry, destRepository, destBranch, destPath string, replaceSrcMetadata bool, metadata Metadata, opts ...graveler.SetOptionsFunc) (*DBEntry, error) {
 	// load repositories information for storage namespace
 	srcRepo, err := c.GetRepository(ctx, srcRepository)
 	if err != nil {
@@ -3136,12 +3147,13 @@ func (c *Catalog) CopyEntry(ctx context.Context, srcRepository, srcRef, srcPath,
 
 	// copy data to a new physical address
 	dstEntry := *srcEntry
+	dstEntry.Metadata = maps.Clone(srcEntry.Metadata)
 	dstEntry.Path = destPath
 	dstEntry.AddressType = AddressTypeRelative
 	dstEntry.PhysicalAddress = c.PathProvider.NewPath()
 
 	if replaceSrcMetadata {
-		dstEntry.Metadata = metadata
+		dstEntry.Metadata = maps.Clone(metadata)
 	}
 
 	srcObject := block.ObjectPointer{

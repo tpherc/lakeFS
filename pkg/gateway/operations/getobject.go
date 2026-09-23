@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/treeverse/lakefs/pkg/block"
 	"github.com/treeverse/lakefs/pkg/catalog"
@@ -38,6 +37,14 @@ func (controller *GetObject) RequiredPermissions(_ *http.Request, repoID, _, pat
 	}, nil
 }
 
+func (controller *GetObject) ReadObjectPath(req *http.Request, repository, reference, path string) (*gatewaypath.ResolvedAbsolutePath, error) {
+	query := req.URL.Query()
+	if query.Has("versioning") || query.Has("tagging") || query.Has(QueryParamUploadID) {
+		return nil, nil
+	}
+	return &gatewaypath.ResolvedAbsolutePath{Repo: repository, Reference: reference, Path: path}, nil
+}
+
 func (controller *GetObject) Handle(w http.ResponseWriter, req *http.Request, o *PathOperation) {
 	if o.HandleUnsupported(w, req, "torrent", "acl", "retention", "legal-hold", "lambdaArn") {
 		return
@@ -66,13 +73,7 @@ func (controller *GetObject) Handle(w http.ResponseWriter, req *http.Request, o 
 		return
 	}
 
-	beforeMeta := time.Now()
-	entry, err := o.Catalog.GetEntry(ctx, o.Repository.Name, o.Reference, o.Path, catalog.GetEntryParams{})
-	metaTook := time.Since(beforeMeta)
-	o.Log(req).
-		WithField("took", metaTook).
-		WithError(err).
-		Debug("metadata operation to retrieve object done")
+	entry, err := o.readEntry()
 
 	if errors.Is(err, graveler.ErrNotFound) {
 		// TODO: create distinction between missing repo & missing key

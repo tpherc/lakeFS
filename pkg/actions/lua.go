@@ -132,7 +132,7 @@ func (h *LuaHook) Run(ctx context.Context, record graveler.HookRecord, buf *byte
 		if err != nil {
 			return err
 		}
-		req = req.WithContext(auth.WithUser(req.Context(), user))
+		req = req.WithContext(auth.CopyAuthorizationContext(ctx, req.Context()))
 		req = req.WithContext(logging.AddFields(req.Context(), getAllowedFields(logging.GetFieldsFromContext(ctx))))
 		req.RemoteAddr = lakefs.LuaRemoteAddr
 		q := req.URL.Query()

@@ -370,15 +370,16 @@ func (c *Controller) UploadPartCopy(w http.ResponseWriter, r *http.Request,
 					Resource: permissions.ObjectArn(dstRepository, dstPath),
 				},
 			},
-			{
-				Permission: permissions.Permission{
-					Action:   permissions.ReadObjectAction,
-					Resource: permissions.ObjectArn(srcRepository, srcPath),
-				},
-			},
+			objectReadPermission(srcRepository, srcPath, nil),
 		},
 	}
-	if !c.authorize(w, r, requiredPermissions) {
+	prepared, ok := c.prepareObjectAuthorization(w, r, requiredPermissions, writeError)
+	if !ok {
+		return
+	}
+	srcEntry, entryErr := c.Catalog.GetEntry(ctx, srcRepository, srcRef, srcPath, catalog.GetEntryParams{})
+	requiredPermissions.Nodes[1] = objectReadPermission(srcRepository, srcPath, srcEntry)
+	if !c.authorizeWith(w, r, prepared, requiredPermissions, writeError) {
 		return
 	}
 
@@ -412,9 +413,8 @@ func (c *Controller) UploadPartCopy(w http.ResponseWriter, r *http.Request,
 		Identifier:       physicalAddress,
 	}
 
-	srcEntry, err := c.Catalog.GetEntry(ctx, srcRepo.Name, srcRef, srcPath, catalog.GetEntryParams{})
-	if err != nil {
-		err = fmt.Errorf("%s/%s/%s: %w", srcRepo.Name, srcRef, srcPath, err)
+	if entryErr != nil {
+		err = fmt.Errorf("%s/%s/%s: %w", srcRepo.Name, srcRef, srcPath, entryErr)
 		_ = c.handleAPIError(ctx, w, r, err)
 		return
 	}
@@ -2244,7 +2244,8 @@ func (c *Controller) ListRepositories(w http.ResponseWriter, r *http.Request, pa
 			writeError(w, r, http.StatusUnauthorized, auth.ErrInsufficientPermissions)
 			return
 		}
-		opts = append(opts, catalog.WithListReposPermissionFilter(user.Username, policies))
+		opts = append(opts, catalog.WithListReposPermissionFilter(user.Username, policies,
+			auth.NewRequestConditionContext(ctx, httputil.ExtractClientIP(r.Header, r.RemoteAddr))))
 	}
 
 	c.LogAction(ctx, "list_repos", r, "", "", "")
@@ -3801,17 +3802,17 @@ func (c *Controller) StageObject(w http.ResponseWriter, r *http.Request, body ap
 }
 
 func (c *Controller) CopyObject(w http.ResponseWriter, r *http.Request, body apigen.CopyObjectJSONRequestBody, repository, branch string, params apigen.CopyObjectParams) {
+	ctx := r.Context()
 	srcPath := body.SrcPath
+	srcRef := swag.StringValue(body.SrcRef)
+	if srcRef == "" {
+		srcRef = branch
+	}
 	destPath := params.DestPath
-	if !c.authorize(w, r, permissions.Node{
+	requiredPermissions := permissions.Node{
 		Type: permissions.NodeTypeAnd,
 		Nodes: []permissions.Node{
-			{
-				Permission: permissions.Permission{
-					Action:   permissions.ReadObjectAction,
-					Resource: permissions.ObjectArn(repository, srcPath),
-				},
-			},
+			objectReadPermission(repository, srcPath, nil),
 			{
 				Permission: permissions.Permission{
 					Action:   permissions.WriteObjectAction,
@@ -3819,11 +3820,20 @@ func (c *Controller) CopyObject(w http.ResponseWriter, r *http.Request, body api
 				},
 			},
 		},
-	}) {
+	}
+	prepared, ok := c.prepareObjectAuthorization(w, r, requiredPermissions, writeError)
+	if !ok {
+		return
+	}
+	srcEntry, entryErr := c.Catalog.GetEntry(ctx, repository, srcRef, srcPath, catalog.GetEntryParams{})
+	requiredPermissions.Nodes[0] = objectReadPermission(repository, srcPath, srcEntry)
+	if !c.authorizeWith(w, r, prepared, requiredPermissions, writeError) {
 		return
 	}
 
-	ctx := r.Context()
+	if c.handleAPIError(ctx, w, r, entryErr) {
+		return
+	}
 	c.LogAction(ctx, "copy_object", r, repository, branch, destPath)
 
 	repo, err := c.Catalog.GetRepository(ctx, repository)
@@ -3841,12 +3851,6 @@ func (c *Controller) CopyObject(w http.ResponseWriter, r *http.Request, body api
 		return
 	}
 
-	// use destination branch as source if not specified
-	srcRef := swag.StringValue(body.SrcRef)
-	if srcRef == "" {
-		srcRef = branch
-	}
-
 	// Handle preconditions
 	opts, err := apiutil.BuildOptsFromParams(body)
 	if c.handleAPIError(ctx, w, r, err) {
@@ -3854,7 +3858,7 @@ func (c *Controller) CopyObject(w http.ResponseWriter, r *http.Request, body api
 	}
 
 	// copy entry
-	entry, err := c.Catalog.CopyEntry(ctx, repository, srcRef, srcPath, repository, branch, destPath, false, nil, opts...)
+	entry, err := c.Catalog.CopyEntryFromSnapshot(ctx, repository, srcRef, srcEntry, repository, branch, destPath, false, nil, opts...)
 	if c.handleAPIError(ctx, w, r, err) {
 		return
 	}
@@ -4830,24 +4834,23 @@ func (c *Controller) LogCommits(w http.ResponseWriter, r *http.Request, reposito
 }
 
 func (c *Controller) HeadObject(w http.ResponseWriter, r *http.Request, repository, ref string, params apigen.HeadObjectParams) {
-	if !c.authorizeCallback(w, r, permissions.Node{
-		Permission: permissions.Permission{
-			Action:   permissions.ReadObjectAction,
-			Resource: permissions.ObjectArn(repository, params.Path),
-		},
-	}, func(w http.ResponseWriter, r *http.Request, code int, v any) {
+	ctx := r.Context()
+	respond := func(w http.ResponseWriter, r *http.Request, code int, _ any) {
 		writeResponse(w, r, code, nil)
-	}) {
+	}
+	prepared, ok := c.prepareObjectAuthorization(w, r, objectReadPermission(repository, params.Path, nil), respond)
+	if !ok {
 		return
 	}
-	ctx := r.Context()
+	entry, entryErr := c.Catalog.GetEntry(ctx, repository, ref, params.Path, catalog.GetEntryParams{})
+	if !c.authorizeWith(w, r, prepared, objectReadPermission(repository, params.Path, entry), respond) {
+		return
+	}
 	c.LogAction(ctx, "head_object", r, repository, ref, "")
 
-	// read the FS entry
-	entry, err := c.Catalog.GetEntry(ctx, repository, ref, params.Path, catalog.GetEntryParams{})
-	if err != nil {
-		log := c.Logger.WithContext(ctx).WithError(err)
-		handleApiErrorCallback(log, w, r, err, func(w http.ResponseWriter, r *http.Request, code int, v any) {
+	if entryErr != nil {
+		log := c.Logger.WithContext(ctx).WithError(entryErr)
+		handleApiErrorCallback(log, w, r, entryErr, func(w http.ResponseWriter, r *http.Request, code int, v any) {
 			writeResponse(w, r, code, nil)
 		})
 		return
@@ -4973,15 +4976,15 @@ func (c *Controller) GetMetadataObject(w http.ResponseWriter, r *http.Request, r
 }
 
 func (c *Controller) GetObject(w http.ResponseWriter, r *http.Request, repository, ref string, params apigen.GetObjectParams) {
-	if !c.authorize(w, r, permissions.Node{
-		Permission: permissions.Permission{
-			Action:   permissions.ReadObjectAction,
-			Resource: permissions.ObjectArn(repository, params.Path),
-		},
-	}) {
+	ctx := r.Context()
+	prepared, ok := c.prepareObjectAuthorization(w, r, objectReadPermission(repository, params.Path, nil), writeError)
+	if !ok {
 		return
 	}
-	ctx := r.Context()
+	entry, entryErr := c.Catalog.GetEntry(ctx, repository, ref, params.Path, catalog.GetEntryParams{})
+	if !c.authorizeWith(w, r, prepared, objectReadPermission(repository, params.Path, entry), writeError) {
+		return
+	}
 	c.LogAction(ctx, "get_object", r, repository, ref, "")
 	requestStart := time.Now()
 
@@ -4990,9 +4993,7 @@ func (c *Controller) GetObject(w http.ResponseWriter, r *http.Request, repositor
 		return
 	}
 
-	// read the FS entry
-	entry, err := c.Catalog.GetEntry(ctx, repository, ref, params.Path, catalog.GetEntryParams{})
-	if c.handleAPIError(ctx, w, r, err) {
+	if c.handleAPIError(ctx, w, r, entryErr) {
 		return
 	}
 	c.Logger.Tracef("get repo %s ref %s path %s: %+v", repository, ref, params.Path, entry)
@@ -5093,15 +5094,31 @@ func (c *Controller) GetObject(w http.ResponseWriter, r *http.Request, repositor
 }
 
 func (c *Controller) ListObjects(w http.ResponseWriter, r *http.Request, repository, ref string, params apigen.ListObjectsParams) {
-	if !c.authorize(w, r, permissions.Node{
+	ctx := r.Context()
+	var prepared *auth.PreparedAuthorization
+	var clientIP string
+	var authorizer auth.Authorizer = c.Auth
+	if swag.BoolValue(params.Presign) {
+		user, err := auth.GetUser(ctx)
+		if err != nil {
+			writeError(w, r, http.StatusUnauthorized, ErrAuthenticatingRequest)
+			return
+		}
+		prepared, err = auth.PrepareAuthorization(ctx, c.Auth, user.Username)
+		if c.handleAPIError(ctx, w, r, err) {
+			return
+		}
+		authorizer = prepared
+		clientIP = httputil.ExtractClientIP(r.Header, r.RemoteAddr)
+	}
+	if !c.authorizeWith(w, r, authorizer, permissions.Node{
 		Permission: permissions.Permission{
 			Action:   permissions.ListObjectsAction,
 			Resource: permissions.RepoArn(repository),
 		},
-	}) {
+	}, writeError) {
 		return
 	}
-	ctx := r.Context()
 	user, _ := auth.GetUser(ctx)
 	c.LogAction(ctx, "list_objects", r, repository, ref, "")
 
@@ -5123,7 +5140,6 @@ func (c *Controller) ListObjects(w http.ResponseWriter, r *http.Request, reposit
 		return
 	}
 
-	var clientIP string
 	objList := make([]apigen.ObjectStats, 0, len(res))
 	for _, entry := range res {
 		qk, err := c.BlockAdapter.ResolveNamespace(repo.StorageID, repo.StorageNamespace, entry.PhysicalAddress, entry.AddressType.ToIdentifierType())
@@ -5154,20 +5170,12 @@ func (c *Controller) ListObjects(w http.ResponseWriter, r *http.Request, reposit
 			if (params.UserMetadata == nil || *params.UserMetadata) && entry.Metadata != nil {
 				objStat.Metadata = &apigen.ObjectUserMetadata{AdditionalProperties: entry.Metadata}
 			}
-			if swag.BoolValue(params.Presign) {
-				if clientIP == "" {
-					clientIP = httputil.ExtractClientIP(r.Header, r.RemoteAddr)
-				}
+			if prepared != nil {
 				// check if the user has read permissions for this object
-				authResponse, err := c.Auth.Authorize(ctx, &auth.AuthorizationRequest{
-					Username: user.Username,
-					RequiredPermissions: permissions.Node{
-						Permission: permissions.Permission{
-							Action:   permissions.ReadObjectAction,
-							Resource: permissions.ObjectArn(repository, entry.Path),
-						},
-					},
-					ClientIP: clientIP,
+				authResponse, err := prepared.Authorize(ctx, &auth.AuthorizationRequest{
+					Username:            user.Username,
+					RequiredPermissions: objectReadPermission(repository, entry.Path, entry),
+					ClientIP:            clientIP,
 				})
 				if c.handleAPIError(ctx, w, r, err) {
 					return
@@ -5207,15 +5215,15 @@ func (c *Controller) ListObjects(w http.ResponseWriter, r *http.Request, reposit
 }
 
 func (c *Controller) StatObject(w http.ResponseWriter, r *http.Request, repository, ref string, params apigen.StatObjectParams) {
-	if !c.authorize(w, r, permissions.Node{
-		Permission: permissions.Permission{
-			Action:   permissions.ReadObjectAction,
-			Resource: permissions.ObjectArn(repository, params.Path),
-		},
-	}) {
+	ctx := r.Context()
+	prepared, ok := c.prepareObjectAuthorization(w, r, objectReadPermission(repository, params.Path, nil), writeError)
+	if !ok {
 		return
 	}
-	ctx := r.Context()
+	entry, entryErr := c.Catalog.GetEntry(ctx, repository, ref, params.Path, catalog.GetEntryParams{})
+	if !c.authorizeWith(w, r, prepared, objectReadPermission(repository, params.Path, entry), writeError) {
+		return
+	}
 	c.LogAction(ctx, "stat_object", r, repository, ref, "")
 
 	repo, err := c.Catalog.GetRepository(ctx, repository)
@@ -5223,8 +5231,7 @@ func (c *Controller) StatObject(w http.ResponseWriter, r *http.Request, reposito
 		return
 	}
 
-	entry, err := c.Catalog.GetEntry(ctx, repository, ref, params.Path, catalog.GetEntryParams{})
-	if c.handleAPIError(ctx, w, r, err) {
+	if c.handleAPIError(ctx, w, r, entryErr) {
 		return
 	}
 
@@ -5296,15 +5303,15 @@ func (c *Controller) UpdateObjectUserMetadata(w http.ResponseWriter, r *http.Req
 }
 
 func (c *Controller) GetUnderlyingProperties(w http.ResponseWriter, r *http.Request, repository, ref string, params apigen.GetUnderlyingPropertiesParams) {
-	if !c.authorize(w, r, permissions.Node{
-		Permission: permissions.Permission{
-			Action:   permissions.ReadObjectAction,
-			Resource: permissions.ObjectArn(repository, params.Path),
-		},
-	}) {
+	ctx := r.Context()
+	prepared, ok := c.prepareObjectAuthorization(w, r, objectReadPermission(repository, params.Path, nil), writeError)
+	if !ok {
 		return
 	}
-	ctx := r.Context()
+	entry, entryErr := c.Catalog.GetEntry(ctx, repository, ref, params.Path, catalog.GetEntryParams{})
+	if !c.authorizeWith(w, r, prepared, objectReadPermission(repository, params.Path, entry), writeError) {
+		return
+	}
 	c.LogAction(ctx, "object_underlying_properties", r, repository, ref, "")
 
 	// read repo
@@ -5313,8 +5320,7 @@ func (c *Controller) GetUnderlyingProperties(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	entry, err := c.Catalog.GetEntry(ctx, repository, ref, params.Path, catalog.GetEntryParams{})
-	if c.handleAPIError(ctx, w, r, err) {
+	if c.handleAPIError(ctx, w, r, entryErr) {
 		return
 	}
 
@@ -6211,6 +6217,10 @@ func paginationFor(hasMore bool, results any, fieldName string) apigen.Paginatio
 }
 
 func (c *Controller) authorizeCallback(w http.ResponseWriter, r *http.Request, perms permissions.Node, cb func(w http.ResponseWriter, r *http.Request, code int, v any)) bool {
+	return c.authorizeWith(w, r, c.Auth, perms, cb)
+}
+
+func (c *Controller) authorizeWith(w http.ResponseWriter, r *http.Request, authorizer auth.Authorizer, perms permissions.Node, cb func(w http.ResponseWriter, r *http.Request, code int, v any)) bool {
 	ctx := r.Context()
 	user, err := auth.GetUser(ctx)
 	if err != nil {
@@ -6220,7 +6230,7 @@ func (c *Controller) authorizeCallback(w http.ResponseWriter, r *http.Request, p
 
 	clientIP := httputil.ExtractClientIP(r.Header, r.RemoteAddr)
 
-	resp, err := c.Auth.Authorize(ctx, &auth.AuthorizationRequest{
+	resp, err := authorizer.Authorize(ctx, &auth.AuthorizationRequest{
 		Username:            user.Username,
 		RequiredPermissions: perms,
 		ClientIP:            clientIP,

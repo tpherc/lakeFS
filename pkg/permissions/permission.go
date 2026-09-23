@@ -11,6 +11,10 @@ const (
 type Permission struct {
 	Action   string
 	Resource string
+
+	// ObjectMetadata is a trusted catalog snapshot for ReadObject authorization.
+	// It is internal evaluation input, never supplied by API clients.
+	ObjectMetadata map[string]string `json:"-"`
 }
 
 type NodeType int

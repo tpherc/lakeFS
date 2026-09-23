@@ -51,8 +51,13 @@ func newLakeFSRequest(ctx context.Context, user *model.User, method, reqURL stri
 	// Chi stores its routing information on the request context which breaks this sub-request's routing.
 	// We explicitly nullify any existing routing information before creating the new request
 	ctx = context.WithValue(ctx, chi.RouteCtxKey, nil)
-	// Add user to the request context
-	ctx = auth.WithUser(ctx, user)
+	// Only the initiating principal may carry its tags into the internal request.
+	initiatingUser, _ := auth.GetUser(ctx)
+	if initiatingUser != nil && initiatingUser == user {
+		ctx = auth.CopyAuthorizationContext(ctx, ctx)
+	} else {
+		ctx = auth.WithUser(ctx, user)
+	}
 	req, err := http.NewRequestWithContext(ctx, method, reqURL, body)
 	if err != nil {
 		return nil, err

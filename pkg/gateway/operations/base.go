@@ -15,6 +15,7 @@ import (
 	"github.com/treeverse/lakefs/pkg/catalog"
 	gwerrors "github.com/treeverse/lakefs/pkg/gateway/errors"
 	"github.com/treeverse/lakefs/pkg/gateway/multipart"
+	gatewaypath "github.com/treeverse/lakefs/pkg/gateway/path"
 	"github.com/treeverse/lakefs/pkg/httputil"
 	"github.com/treeverse/lakefs/pkg/kv"
 	"github.com/treeverse/lakefs/pkg/logging"
@@ -228,9 +229,33 @@ type RefOperation struct {
 	Reference string
 }
 
+// ObjectReadSnapshot binds authorization metadata to the entry used for the read.
+// Lookup errors are retained so authorization precedes the operation's error response.
+type ObjectReadSnapshot struct {
+	Path  gatewaypath.ResolvedAbsolutePath
+	Entry *catalog.DBEntry
+	Err   error
+}
+
 type PathOperation struct {
 	*RefOperation
-	Path string
+	Path       string
+	ObjectRead *ObjectReadSnapshot
+}
+
+var errMissingObjectReadSnapshot = errors.New("missing authorized object read snapshot")
+
+func (o *PathOperation) readEntry() (*catalog.DBEntry, error) {
+	if o.ObjectRead == nil {
+		return nil, errMissingObjectReadSnapshot
+	}
+	if o.ObjectRead.Err != nil {
+		return nil, o.ObjectRead.Err
+	}
+	if o.ObjectRead.Entry == nil {
+		return nil, errMissingObjectReadSnapshot
+	}
+	return o.ObjectRead.Entry, nil
 }
 
 func (o *PathOperation) EncodeError(w http.ResponseWriter, req *http.Request, originalError error, fallbackError gwerrors.APIError) *http.Request {
@@ -283,4 +308,10 @@ type BranchOperationHandler interface {
 type PathOperationHandler interface {
 	RequiredPermissions(req *http.Request, repository, branch, path string) (permissions.Node, error)
 	Handle(w http.ResponseWriter, req *http.Request, op *PathOperation)
+}
+
+// ObjectReadHandler identifies the existing object whose bytes an operation reads.
+// A nil path means the request does not read an object (for example, listing parts).
+type ObjectReadHandler interface {
+	ReadObjectPath(req *http.Request, repository, reference, path string) (*gatewaypath.ResolvedAbsolutePath, error)
 }

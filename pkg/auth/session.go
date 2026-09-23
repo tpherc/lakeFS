@@ -23,6 +23,22 @@ const (
 	currentSessionEncodingVersion = 1
 )
 
+var errLegacyCodecDecodeOnly = errors.New("legacy session codec is decode-only")
+
+// decodeOnlyCodec keeps historical signed cookies readable without allowing new
+// cookies to fall back to an unencrypted encoding.
+type decodeOnlyCodec struct {
+	codec securecookie.Codec
+}
+
+func (c decodeOnlyCodec) Encode(_ string, _ any) (string, error) {
+	return "", errLegacyCodecDecodeOnly
+}
+
+func (c decodeOnlyCodec) Decode(name, value string, dst any) error {
+	return c.codec.Decode(name, value, dst)
+}
+
 type SessionStoreOptions struct {
 	MaxAge int
 	Secure bool
@@ -40,10 +56,8 @@ func NewSessionStore(sharedSecret []byte, options SessionStoreOptions) (*session
 	if err != nil {
 		return nil, err
 	}
-	store := sessions.NewCookieStore(
-		authKey, blockKey, // new encrypted cookies
-		sharedSecret, // decode-only fallback for old signed cookies
-	)
+	store := sessions.NewCookieStore(authKey, blockKey)
+	store.Codecs = append(store.Codecs, decodeOnlyCodec{codec: securecookie.New(sharedSecret, nil)})
 	store.Options = &sessions.Options{
 		Path:     "/",
 		MaxAge:   options.MaxAge,
@@ -92,8 +106,26 @@ func SaveSession(r *http.Request, w http.ResponseWriter, session *sessions.Sessi
 	if session == nil {
 		return fmt.Errorf("cannot save nil session")
 	}
-	session.Values[sessionEncodingVersionKey] = currentSessionEncodingVersion
+	PrepareSessionForSave(session)
 	return session.Save(r, w)
+}
+
+// PrepareSessionForSave adds the metadata shared by cookie preflight and save.
+func PrepareSessionForSave(session *sessions.Session) {
+	if session.Values == nil {
+		session.Values = make(map[interface{}]interface{})
+	}
+	session.Values[sessionEncodingVersionKey] = currentSessionEncodingVersion
+}
+
+// ValidateEncryptedCookieSessionEncoding checks the current codec of a store
+// created by NewSessionStore. It never tries the legacy decode-only codec.
+func ValidateEncryptedCookieSessionEncoding(store *sessions.CookieStore, session *sessions.Session) error {
+	if store == nil || len(store.Codecs) == 0 || session == nil {
+		return fmt.Errorf("%w: encrypted cookie session or codec is missing", ErrInternalServerError)
+	}
+	_, err := store.Codecs[0].Encode(session.Name(), session.Values)
+	return err
 }
 
 // IsSessionDecodeError reports whether err is a recoverable secure-cookie decode failure.

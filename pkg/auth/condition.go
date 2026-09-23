@@ -1,19 +1,24 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"strings"
 
-	"github.com/treeverse/lakefs/pkg/auth/wildcard"
+	"github.com/treeverse/lakefs/pkg/auth/oidc/principaltags"
+	"github.com/treeverse/lakefs/pkg/permissions"
 )
 
 const (
-	OperatorNameIpAddress     = "IpAddress"
-	OperatorNameNotIpAddress  = "NotIpAddress"
-	OperatorNameStringLike    = "StringLike"
-	OperatorNameStringNotLike = "StringNotLike"
+	OperatorNameIpAddress       = "IpAddress"
+	OperatorNameNotIpAddress    = "NotIpAddress"
+	OperatorNameStringLike      = "StringLike"
+	OperatorNameStringNotLike   = "StringNotLike"
+	OperatorNameStringEquals    = "StringEquals"
+	OperatorNameStringNotEquals = "StringNotEquals"
 )
 
 var (
@@ -27,7 +32,9 @@ var (
 // ConditionContext holds contextual information for condition evaluation
 // Fields is a map of field names to their string values (e.g., {"SourceIp": "203.0.113.5", "VpcId": "vpc-123"})
 type ConditionContext struct {
-	Fields map[string]string
+	Fields         map[string]string
+	principalTags  principaltags.Tags
+	objectMetadata map[string]string
 }
 
 // ConditionOperator defines the interface for different condition operators
@@ -81,7 +88,7 @@ func (op *IpAddressOperator) Evaluate(fields map[string][]string, conditionCtx *
 	// Check each field in the condition against context values (AND logic between fields)
 	for fieldName, conditionValues := range fields {
 		// No field or empty value for the field - condition fails
-		contextValue, hasField := conditionCtx.Fields[fieldName]
+		contextValue, hasField := conditionCtx.Lookup(fieldName)
 		if !hasField {
 			return false, nil
 		}
@@ -92,7 +99,7 @@ func (op *IpAddressOperator) Evaluate(fields map[string][]string, conditionCtx *
 		// Parse the context value as an IP address
 		contextIP := net.ParseIP(contextValue)
 		if contextIP == nil {
-			return false, fmt.Errorf("%w in field %s: %s", ErrInvalidIPFormat, fieldName, contextValue)
+			return false, fmt.Errorf("%w in field %s", ErrInvalidIPFormat, fieldName)
 		}
 
 		// Check if context IP matches any of the condition values for this field (OR logic within field)
@@ -140,48 +147,43 @@ type StringMatchOperator struct {
 	negate bool
 }
 
-// Validate implements ConditionOperator. Any string is a valid wildcard pattern.
+// Validate checks field names and policy variable syntax.
 func (op *StringMatchOperator) Validate(fields map[string][]string) error {
-	for field := range fields {
-		if field == "" {
-			return ErrMissingFieldName
-		}
-	}
-	return nil
+	_, err := compileStringConditions(fields, wildcardComparison, op.negate)
+	return err
 }
 
-// Evaluate checks if the context value matches any of the wildcard patterns for each field.
-// AND logic between fields, OR logic within a field's values.
+// Evaluate combines candidates with OR, fields with AND, and negates each field once.
 func (op *StringMatchOperator) Evaluate(fields map[string][]string, conditionCtx *ConditionContext) (bool, error) {
 	if len(fields) == 0 {
 		return true, nil
 	}
-	if conditionCtx == nil {
-		return false, ErrInvalidConditionContext
+	operatorName := OperatorNameStringLike
+	if op.negate {
+		operatorName = OperatorNameStringNotLike
 	}
+	return EvaluateConditions(map[string]map[string][]string{operatorName: fields}, conditionCtx)
+}
 
-	for fieldName, patterns := range fields {
-		contextValue, hasField := conditionCtx.Fields[fieldName]
-		if !hasField {
-			return false, nil
-		}
+// StringEqualsOperator compares strings literally, including '*' and '?'.
+type StringEqualsOperator struct {
+	negate bool
+}
 
-		fieldMatched := false
-		for _, pattern := range patterns {
-			if wildcard.Match(pattern, contextValue) {
-				fieldMatched = true
-				break
-			}
-		}
+func (op *StringEqualsOperator) Validate(fields map[string][]string) error {
+	_, err := compileStringConditions(fields, exactComparison, op.negate)
+	return err
+}
 
-		// For StringLike: fail if field didn't match
-		// For StringNotLike: fail if field matched
-		if fieldMatched == op.negate {
-			return false, nil
-		}
+func (op *StringEqualsOperator) Evaluate(fields map[string][]string, conditionCtx *ConditionContext) (bool, error) {
+	if len(fields) == 0 {
+		return true, nil
 	}
-
-	return true, nil
+	operatorName := OperatorNameStringEquals
+	if op.negate {
+		operatorName = OperatorNameStringNotEquals
+	}
+	return EvaluateConditions(map[string]map[string][]string{operatorName: fields}, conditionCtx)
 }
 
 // OperatorFactory returns the appropriate operator for a given operator name
@@ -195,6 +197,10 @@ func OperatorFactory(operatorName string) (ConditionOperator, error) {
 		return &StringMatchOperator{negate: false}, nil
 	case OperatorNameStringNotLike:
 		return &StringMatchOperator{negate: true}, nil
+	case OperatorNameStringEquals:
+		return &StringEqualsOperator{negate: false}, nil
+	case OperatorNameStringNotEquals:
+		return &StringEqualsOperator{negate: true}, nil
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedConditionOperator, operatorName)
 	}
@@ -205,36 +211,21 @@ func OperatorFactory(operatorName string) (ConditionOperator, error) {
 // AWS IAM format: {"IpAddress": {"SourceIp": ["203.0.113.0/24", "198.51.100.25/32"]}}
 // Returns true only if all conditions pass (AND logic)
 func EvaluateConditions(conditions map[string]map[string][]string, conditionCtx *ConditionContext) (bool, error) {
+	compiled, err := compileConditions(conditions)
+	if err != nil {
+		return false, err
+	}
 	if len(conditions) == 0 {
-		// No conditions mean always pass
 		return true, nil
 	}
-
-	// Validate context
 	if conditionCtx == nil {
 		return false, ErrInvalidConditionContext
 	}
-
-	// All conditions must pass (AND logic)
-	for operatorName, fields := range conditions {
-		operator, err := OperatorFactory(operatorName)
-		if err != nil {
-			return false, err
-		}
-
-		passed, err := operator.Evaluate(fields, conditionCtx)
-		if err != nil {
-			return false, err
-		}
-
-		if !passed {
-			// One condition failed, entire statement fails
-			return false, nil
-		}
+	bound, err := compiled.bind(conditionCtx.Lookup)
+	if err != nil {
+		return false, err
 	}
-
-	// All conditions passed
-	return true, nil
+	return bound.evaluate(conditionCtx)
 }
 
 // NewConditionContext creates a ConditionContext with the client IP in the SourceIp field
@@ -253,4 +244,55 @@ func NewConditionContextWithFields(fields map[string]string) *ConditionContext {
 	return &ConditionContext{
 		Fields: fields,
 	}
+}
+
+// AddPrincipalTags copies validated tags into a private, case-insensitive namespace.
+// Keeping them separate from Fields prevents routine authorization logs from exposing values.
+func (c *ConditionContext) AddPrincipalTags(tags principaltags.Tags) {
+	c.principalTags = make(principaltags.Tags, len(tags))
+	for key, value := range tags {
+		c.principalTags[principaltags.FoldKey(key)] = value
+	}
+}
+
+// Lookup reserves trusted attribute namespaces and folds only PrincipalTag keys.
+func (c *ConditionContext) Lookup(fieldName string) (string, bool) {
+	const prefix = "aws:PrincipalTag/"
+	if namespace, key, found := strings.Cut(fieldName, "/"); found && strings.EqualFold(namespace+"/", prefix) {
+		value, ok := c.principalTags[principaltags.FoldKey(key)]
+		return value, ok
+	}
+	if key, found := strings.CutPrefix(fieldName, "lakefs:ObjectMetadata/"); found {
+		value, ok := c.objectMetadata[key]
+		return value, ok
+	}
+	value, ok := c.Fields[fieldName]
+	return value, ok
+}
+
+// NewRequestConditionContext builds policy context from the authenticated principal snapshot.
+func NewRequestConditionContext(ctx context.Context, clientIP string) *ConditionContext {
+	conditionCtx := NewConditionContext(clientIP)
+	if tags, ok := PrincipalTagsFromContext(ctx); ok {
+		conditionCtx.AddPrincipalTags(tags)
+	}
+	return conditionCtx
+}
+
+// WithRequestConditionContext makes the request attributes available to CheckPermissions.
+func WithRequestConditionContext(ctx context.Context, clientIP string) context.Context {
+	return context.WithValue(ctx, contextKeyConditionContext, NewRequestConditionContext(ctx, clientIP))
+}
+
+// permissionConditionContext isolates resource attributes to one permission leaf.
+func permissionConditionContext(ctx context.Context, permission permissions.Permission) *ConditionContext {
+	conditionCtx := &ConditionContext{}
+	if requestCtx, ok := ctx.Value(contextKeyConditionContext).(*ConditionContext); ok && requestCtx != nil {
+		conditionCtx.Fields = maps.Clone(requestCtx.Fields)
+		conditionCtx.principalTags = maps.Clone(requestCtx.principalTags)
+	}
+	if permission.Action == permissions.ReadObjectAction {
+		conditionCtx.objectMetadata = maps.Clone(permission.ObjectMetadata)
+	}
+	return conditionCtx
 }

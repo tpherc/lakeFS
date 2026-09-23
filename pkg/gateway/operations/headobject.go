@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/treeverse/lakefs/pkg/catalog"
 	gatewayerrors "github.com/treeverse/lakefs/pkg/gateway/errors"
+	gatewaypath "github.com/treeverse/lakefs/pkg/gateway/path"
 	"github.com/treeverse/lakefs/pkg/graveler"
 	"github.com/treeverse/lakefs/pkg/httputil"
 	"github.com/treeverse/lakefs/pkg/permissions"
@@ -23,9 +23,13 @@ func (controller *HeadObject) RequiredPermissions(_ *http.Request, repoID, _, pa
 	}, nil
 }
 
+func (controller *HeadObject) ReadObjectPath(_ *http.Request, repository, reference, path string) (*gatewaypath.ResolvedAbsolutePath, error) {
+	return &gatewaypath.ResolvedAbsolutePath{Repo: repository, Reference: reference, Path: path}, nil
+}
+
 func (controller *HeadObject) Handle(w http.ResponseWriter, req *http.Request, o *PathOperation) {
 	o.Incr("stat_object", o.Principal, o.Repository.Name, o.Reference)
-	entry, err := o.Catalog.GetEntry(req.Context(), o.Repository.Name, o.Reference, o.Path, catalog.GetEntryParams{})
+	entry, err := o.readEntry()
 	if errors.Is(err, graveler.ErrNotFound) {
 		// TODO: create distinction between missing repo & missing key
 		o.Log(req).Debug("path not found")

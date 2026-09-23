@@ -1,6 +1,7 @@
 package operations
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -72,15 +73,16 @@ func (controller *PutObject) RequiredPermissions(req *http.Request, repoID, _, d
 	}, nil
 }
 
-// extractEntryFromCopyReq: get metadata from source file
-func extractEntryFromCopyReq(w http.ResponseWriter, req *http.Request, o *PathOperation, copySource path.ResolvedAbsolutePath) *catalog.DBEntry {
-	ent, err := o.Catalog.GetEntry(req.Context(), copySource.Repo, copySource.Reference, copySource.Path, catalog.GetEntryParams{})
-	if err != nil {
-		o.Log(req).WithError(err).Error("could not read copy source")
-		_ = o.EncodeError(w, req, err, gatewayErrors.Codes.ToAPIErr(gatewayErrors.ErrInvalidCopySource))
-		return nil
+func (controller *PutObject) ReadObjectPath(req *http.Request, _, _, _ string) (*path.ResolvedAbsolutePath, error) {
+	copySource := req.Header.Get(CopySourceHeader)
+	if copySource == "" {
+		return nil, nil
 	}
-	return ent
+	sourcePath, err := getPathFromSource(copySource)
+	if err != nil {
+		return nil, err
+	}
+	return &sourcePath, nil
 }
 
 func getPathFromSource(copySource string) (path.ResolvedAbsolutePath, error) {
@@ -95,20 +97,10 @@ func getPathFromSource(copySource string) (path.ResolvedAbsolutePath, error) {
 	return p, nil
 }
 
-func handleCopy(w http.ResponseWriter, req *http.Request, o *PathOperation, copySource string) {
+func handleCopy(w http.ResponseWriter, req *http.Request, o *PathOperation) {
 	repository := o.Repository.Name
 	branch := o.Reference
 	o.Incr("copy_object", o.Principal, repository, branch)
-	srcPath, err := getPathFromSource(copySource)
-	if err != nil {
-		o.Log(req).WithError(err).Error("could not parse copy source path")
-		// This is a solution to avoid misleading error messages in gateway. This is a pinpoint fix for the copy object
-		// API, since we decided not to change the entire gateway error handling in order to avoid breaking changes.
-		// See: https://github.com/treeverse/lakeFS/issues/7452
-		apiErr := gatewayErrors.Codes.ToAPIErrWithInternalError(gatewayErrors.ErrInvalidCopySource, err)
-		_ = o.EncodeError(w, req, err, apiErr)
-		return
-	}
 
 	ctx := req.Context()
 
@@ -125,7 +117,7 @@ func handleCopy(w http.ResponseWriter, req *http.Request, o *PathOperation, copy
 	}
 	replaceMetadata := shouldReplaceMetadata(req)
 
-	entry, err := o.Catalog.CopyEntry(ctx, srcPath.Repo, srcPath.Reference, srcPath.Path, repository, branch, o.Path, replaceMetadata, metadata)
+	entry, err := copyAuthorizedEntry(ctx, o, replaceMetadata, metadata)
 	if err != nil {
 		o.Log(req).WithError(err).Error("could create a copy")
 		if errors.Is(err, block.ErrDataNotFound) || errors.Is(err, graveler.ErrNotFound) {
@@ -141,6 +133,15 @@ func handleCopy(w http.ResponseWriter, req *http.Request, o *PathOperation, copy
 		LastModified: serde.Timestamp(entry.CreationDate),
 		ETag:         httputil.ETag(entry.Checksum),
 	}, http.StatusOK)
+}
+
+func copyAuthorizedEntry(ctx context.Context, o *PathOperation, replaceMetadata bool, metadata catalog.Metadata) (*catalog.DBEntry, error) {
+	entry, err := o.readEntry()
+	if err != nil {
+		return nil, err
+	}
+	source := o.ObjectRead.Path
+	return o.Catalog.CopyEntryFromSnapshot(ctx, source.Repo, source.Reference, entry, o.Repository.Name, o.Reference, o.Path, replaceMetadata, metadata)
 }
 
 func handleUploadPart(w http.ResponseWriter, req *http.Request, o *PathOperation) {
@@ -175,16 +176,13 @@ func handleUploadPart(w http.ResponseWriter, req *http.Request, o *PathOperation
 	// https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPartCopy.html#API_UploadPartCopy_RequestSyntax
 	if copySource := req.Header.Get(CopySourceHeader); copySource != "" {
 		// see if there's a range passed as well
-		resolvedCopySource, err := getPathFromSource(copySource)
-		if err != nil {
-			o.Log(req).WithField("copy_source", copySource).WithError(err).Error("could not parse copy source path")
-			_ = o.EncodeError(w, req, err, gatewayErrors.Codes.ToAPIErr(gatewayErrors.ErrInvalidCopySource))
+		ent, entryErr := o.readEntry()
+		if entryErr != nil {
+			o.Log(req).WithError(entryErr).Error("could not read copy source")
+			_ = o.EncodeError(w, req, entryErr, gatewayErrors.Codes.ToAPIErr(gatewayErrors.ErrInvalidCopySource))
 			return
 		}
-		ent := extractEntryFromCopyReq(w, req, o, resolvedCopySource)
-		if ent == nil {
-			return // operation already failed
-		}
+		resolvedCopySource := o.ObjectRead.Path
 		srcRepo := o.Repository
 		if resolvedCopySource.Repo != o.Repository.Name {
 			srcRepo, err = o.Catalog.GetRepository(req.Context(), resolvedCopySource.Repo)
@@ -310,7 +308,7 @@ func (controller *PutObject) Handle(w http.ResponseWriter, req *http.Request, o 
 		// same file continue to use that storage class.
 
 		// TODO(ariels): Add a counter for how often a copy has different options
-		handleCopy(w, req, o, copySource)
+		handleCopy(w, req, o)
 		return
 	}
 
