@@ -189,6 +189,8 @@ func generateHostID() string {
 type AuthorizedOperation struct {
 	*Operation
 	Principal string
+	// Authorizer retains the request policy snapshot for checks during the operation.
+	Authorizer auth.Authorizer
 }
 
 type RepoOperation struct {

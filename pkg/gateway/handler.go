@@ -184,7 +184,15 @@ func RepoOperationHandler(sc *ServerContext, handler operations.RepoOperationHan
 			_ = o.EncodeError(w, req, err, gatewayerrors.ErrAccessDenied.ToAPIErr())
 			return
 		}
-		authOp := authorize(w, req, sc.authService, perms)
+		var authorizer auth.Authorizer = sc.authService
+		if o.OperationID == operations.OperationIDListObjects {
+			prepared := prepareAuthorization(w, req, sc.authService, perms)
+			if prepared == nil {
+				return
+			}
+			authorizer = prepared
+		}
+		authOp := authorize(w, req, authorizer, perms)
 		if authOp == nil {
 			return
 		}
@@ -228,7 +236,7 @@ func PathOperationHandler(sc *ServerContext, handler operations.PathOperationHan
 				return
 			}
 			if readPath != nil {
-				prepared := prepareObjectReadAuthorization(w, req, sc.authService, perms)
+				prepared := prepareAuthorization(w, req, sc.authService, perms)
 				if prepared == nil {
 					return
 				}
@@ -271,7 +279,7 @@ func PathOperationHandler(sc *ServerContext, handler operations.PathOperationHan
 	})
 }
 
-func prepareObjectReadAuthorization(w http.ResponseWriter, req *http.Request, service auth.GatewayService, perms permissions.Node) *auth.PreparedAuthorization {
+func prepareAuthorization(w http.ResponseWriter, req *http.Request, service auth.GatewayService, perms permissions.Node) *auth.PreparedAuthorization {
 	o := req.Context().Value(ContextKeyOperation).(*operations.Operation)
 	user, err := auth.GetUser(req.Context())
 	if err != nil {
@@ -320,8 +328,9 @@ func authorize(w http.ResponseWriter, req *http.Request, authService auth.Author
 	if len(perms.Nodes) == 0 && len(perms.Permission.Action) == 0 {
 		// has not provided required permissions
 		return &operations.AuthorizedOperation{
-			Operation: o,
-			Principal: username,
+			Operation:  o,
+			Principal:  username,
+			Authorizer: authService,
 		}
 	}
 
@@ -347,8 +356,9 @@ func authorize(w http.ResponseWriter, req *http.Request, authService auth.Author
 		return nil
 	}
 	return &operations.AuthorizedOperation{
-		Operation: o,
-		Principal: username,
+		Operation:  o,
+		Principal:  username,
+		Authorizer: authService,
 	}
 }
 

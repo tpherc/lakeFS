@@ -16,6 +16,7 @@ type compiledConditions struct {
 	requiresContext bool
 	strings         []compiledStringCondition
 	ips             []ipCondition
+	nulls           []nullCondition
 }
 
 // boundConditions owns the resolved RHS values for one principal snapshot.
@@ -24,6 +25,7 @@ type boundConditions struct {
 	requiresContext bool
 	strings         []boundStringCondition
 	ips             []ipCondition
+	nulls           []nullCondition
 }
 
 type stringCondition struct {
@@ -48,6 +50,11 @@ type ipCondition struct {
 	networks []*net.IPNet
 	ips      []net.IP
 	negate   bool
+}
+
+type nullCondition struct {
+	field  string
+	values []bool
 }
 
 func compileConditions(conditions map[string]map[string][]string) (*compiledConditions, error) {
@@ -77,6 +84,12 @@ func compileConditions(conditions map[string]map[string][]string) (*compiledCond
 				return nil, err
 			}
 			compiled.strings = append(compiled.strings, fields...)
+		case *NullOperator:
+			fields, err := compileNullConditions(fields)
+			if err != nil {
+				return nil, err
+			}
+			compiled.nulls = append(compiled.nulls, fields...)
 		default:
 			return nil, fmt.Errorf("%w: %s", ErrUnsupportedConditionOperator, name)
 		}
@@ -92,6 +105,32 @@ func validateConditionField(field string) error {
 		return fmt.Errorf("condition field must be literal: %w", policytemplate.ErrInvalidTemplate)
 	}
 	return nil
+}
+
+func compileNullConditions(fields map[string][]string) ([]nullCondition, error) {
+	compiled := make([]nullCondition, 0, len(fields))
+	for _, field := range slices.Sorted(maps.Keys(fields)) {
+		if err := validateConditionField(field); err != nil {
+			return nil, err
+		}
+		values := fields[field]
+		if len(values) == 0 {
+			return nil, fmt.Errorf("%w for field %s: empty value list", ErrInvalidNullConditionValue, field)
+		}
+		condition := nullCondition{field: field, values: make([]bool, 0, len(values))}
+		for _, value := range values {
+			switch value {
+			case "true":
+				condition.values = append(condition.values, true)
+			case "false":
+				condition.values = append(condition.values, false)
+			default:
+				return nil, fmt.Errorf("%w for field %s", ErrInvalidNullConditionValue, field)
+			}
+		}
+		compiled = append(compiled, condition)
+	}
+	return compiled, nil
 }
 
 func compileStringConditions(fields map[string][]string, compare func(string, string) bool, negate bool) ([]compiledStringCondition, error) {
@@ -152,7 +191,10 @@ func compileIPConditions(fields map[string][]string, operator *IpAddressOperator
 }
 
 func (c *compiledConditions) bind(lookup policytemplate.Lookup) (*boundConditions, error) {
-	bound := &boundConditions{requiresContext: c.requiresContext, ips: c.ips, strings: make([]boundStringCondition, 0, len(c.strings))}
+	bound := &boundConditions{
+		requiresContext: c.requiresContext, ips: c.ips, nulls: c.nulls,
+		strings: make([]boundStringCondition, 0, len(c.strings)),
+	}
 	for _, condition := range c.strings {
 		field := boundStringCondition{
 			stringCondition: condition.stringCondition,
@@ -194,7 +236,18 @@ func (c *boundConditions) evaluate(ctx *ConditionContext) (bool, error) {
 			passed = false
 		}
 	}
+	for _, condition := range c.nulls {
+		if !condition.evaluate(ctx) {
+			passed = false
+		}
+	}
 	return passed, nil
+}
+
+func (c nullCondition) evaluate(ctx *ConditionContext) bool {
+	value, present := ctx.Lookup(c.field)
+	isNull := !present || value == ""
+	return slices.Contains(c.values, isNull)
 }
 
 func (c boundStringCondition) evaluate(ctx *ConditionContext) bool {

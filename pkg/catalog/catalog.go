@@ -1272,7 +1272,11 @@ func (c *Catalog) DeleteEntries(ctx context.Context, repositoryID string, branch
 	return c.Store.DeleteBatch(ctx, repository, branchID, keys, opts...)
 }
 
-func (c *Catalog) ListEntries(ctx context.Context, repositoryID string, reference string, prefix string, after string, delimiter string, limit int) ([]*DBEntry, bool, error) {
+func (c *Catalog) ListEntries(ctx context.Context, repositoryID string, reference string, prefix string, after string, delimiter string, limit int, opts ...ListEntriesOptionsFunc) ([]*DBEntry, bool, error) {
+	options := &ListEntriesOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
 	// normalize limit
 	if limit < 0 || limit > ListEntriesLimitMax {
 		limit = ListEntriesLimitMax
@@ -1297,7 +1301,14 @@ func (c *Catalog) ListEntries(ctx context.Context, repositoryID string, referenc
 	if err != nil {
 		return nil, false, err
 	}
-	it := NewEntryListingIterator(NewValueToEntryIterator(iter), prefixPath, delimiterPath)
+	var entriesIterator EntryIterator = NewValueToEntryIterator(iter)
+	if prefixPath != "" {
+		entriesIterator = NewPrefixIterator(entriesIterator, prefixPath)
+	}
+	if options.FilterFunc != nil {
+		entriesIterator = &entryFilterIterator{ctx: ctx, it: entriesIterator, filter: options.FilterFunc}
+	}
+	it := newEntryListingIterator(entriesIterator, prefixPath, delimiterPath)
 	defer it.Close()
 
 	if afterPath != "" {
@@ -1307,7 +1318,7 @@ func (c *Catalog) ListEntries(ctx context.Context, repositoryID string, referenc
 	var entries []*DBEntry
 	for it.Next() {
 		v := it.Value()
-		if v.Path == afterPath {
+		if v.Path <= afterPath {
 			continue
 		}
 		entry := newCatalogEntryFromEntry(v.CommonPrefix, v.Path.String(), v.Entry)

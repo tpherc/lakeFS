@@ -19,6 +19,7 @@ const (
 	OperatorNameStringNotLike   = "StringNotLike"
 	OperatorNameStringEquals    = "StringEquals"
 	OperatorNameStringNotEquals = "StringNotEquals"
+	OperatorNameNull            = "Null"
 )
 
 var (
@@ -27,6 +28,7 @@ var (
 	ErrInvalidConditionContext      = errors.New("invalid condition context")
 	ErrInvalidIPFormat              = errors.New("invalid IP format")
 	ErrUnsupportedConditionOperator = errors.New("unsupported condition operator")
+	ErrInvalidNullConditionValue    = errors.New("null condition requires literal true or false values")
 )
 
 // ConditionContext holds contextual information for condition evaluation
@@ -186,6 +188,22 @@ func (op *StringEqualsOperator) Evaluate(fields map[string][]string, conditionCt
 	return EvaluateConditions(map[string]map[string][]string{operatorName: fields}, conditionCtx)
 }
 
+// NullOperator tests whether a context key is absent or has an empty value.
+// Its values are literal booleans; policy variables are not supported.
+type NullOperator struct{}
+
+func (op *NullOperator) Validate(fields map[string][]string) error {
+	_, err := compileNullConditions(fields)
+	return err
+}
+
+func (op *NullOperator) Evaluate(fields map[string][]string, conditionCtx *ConditionContext) (bool, error) {
+	if len(fields) == 0 {
+		return true, nil
+	}
+	return EvaluateConditions(map[string]map[string][]string{OperatorNameNull: fields}, conditionCtx)
+}
+
 // OperatorFactory returns the appropriate operator for a given operator name
 func OperatorFactory(operatorName string) (ConditionOperator, error) {
 	switch operatorName {
@@ -201,6 +219,8 @@ func OperatorFactory(operatorName string) (ConditionOperator, error) {
 		return &StringEqualsOperator{negate: false}, nil
 	case OperatorNameStringNotEquals:
 		return &StringEqualsOperator{negate: true}, nil
+	case OperatorNameNull:
+		return &NullOperator{}, nil
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedConditionOperator, operatorName)
 	}

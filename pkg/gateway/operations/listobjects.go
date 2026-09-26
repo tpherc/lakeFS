@@ -36,6 +36,11 @@ const (
 
 type ListObjects struct{}
 
+func listEntriesPermissionFilter(req *http.Request, o *RepoOperation) catalog.ListEntriesOptionsFunc {
+	return catalog.WithListEntriesPermissionFilter(req.Context(), o.Authorizer, o.Principal, o.Repository.Name,
+		httputil.ExtractClientIP(req.Header, req.RemoteAddr))
+}
+
 func (controller *ListObjects) RequiredPermissions(req *http.Request, repoID string) (permissions.Node, error) {
 	// check if we're listing files in a branch, or listing branches
 	params := req.URL.Query()
@@ -196,6 +201,7 @@ func (controller *ListObjects) ListV2(w http.ResponseWriter, req *http.Request, 
 			from.Path,
 			delimiter,
 			maxKeys,
+			listEntriesPermissionFilter(req, o),
 		)
 		log := o.Log(req).WithError(err).WithFields(logging.Fields{
 			"ref":  prefix.Ref,
@@ -321,6 +327,7 @@ func (controller *ListObjects) ListV1(w http.ResponseWriter, req *http.Request, 
 			marker.Path,
 			delimiter,
 			maxKeys,
+			listEntriesPermissionFilter(req, o),
 		)
 		if errors.Is(err, graveler.ErrNotFound) {
 			results = make([]*catalog.DBEntry, 0) // no results found

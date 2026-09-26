@@ -6,9 +6,13 @@
     font-size: 1rem;
     font-weight: 400;
     line-height: 1.5;
+    background-clip: padding-box;
+}
+
+.form-control,
+.form-select {
     color: var(--text);
     background-color: var(--surface);
-    background-clip: padding-box;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     transition:
@@ -16,7 +20,8 @@
         box-shadow var(--transition-fast);
 }
 
-.form-control:focus {
+.form-control:focus,
+.form-select:focus {
     color: var(--text);
     background-color: var(--surface);
     border-color: var(--primary-light);
@@ -40,7 +45,8 @@
 }
 
 /* Dark mode specific fixes */
-[data-bs-theme='dark'] .form-control {
+[data-bs-theme='dark'] .form-control,
+[data-bs-theme='dark'] .form-select {
     background-color: #2d3748;
     color: #f9fafb;
     border-color: #4b5563;

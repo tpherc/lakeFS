@@ -861,16 +861,21 @@ export const URINavigator = ({
                             <TerminalIcon />
                         </TooltipButton>
                     )}
+                    {downloadUrl && (
+                        <Button
+                            as="a"
+                            href={downloadUrl}
+                            download={path.split('/').pop()}
+                            variant="outline-secondary"
+                            size="sm"
+                            className="download-button"
+                            aria-label="Download object"
+                            title="Download object"
+                        >
+                            <FaDownload />
+                        </Button>
+                    )}
                 </ButtonGroup>
-                {downloadUrl && (
-                    <a
-                        href={downloadUrl}
-                        download={path.split('/').pop()}
-                        className="btn btn-link btn-sm download-button me-1"
-                    >
-                        <FaDownload />
-                    </a>
-                )}
             </div>
             {hasMountButton && !isPathToFile && (
                 <MountModal

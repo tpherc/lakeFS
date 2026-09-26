@@ -9,7 +9,7 @@
 > **What's enabled:**
 > - `auth.ui_config.rbac: internal` with `features.local_rbac: true` — Full local RBAC with users, groups, and policies
 > - `auth.ui_config.rbac: simplified` — Multi-user with ACL-based permissions
-> - `auth.providers.oidc` — OIDC SSO
+> - `auth.providers.oidc` — OIDC SSO with PrincipalTag policy conditions and IAM policy variables
 >
 > **Compatibility note:** set `features.local_rbac: false` when `auth.ui_config.rbac: internal` should use an external auth API service through `auth.api.*`.
 > Switching from an external OIDC auth service to embedded OIDC requires users to sign in again; existing OIDC session cookies are not migrated.

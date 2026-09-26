@@ -5095,23 +5095,16 @@ func (c *Controller) GetObject(w http.ResponseWriter, r *http.Request, repositor
 
 func (c *Controller) ListObjects(w http.ResponseWriter, r *http.Request, repository, ref string, params apigen.ListObjectsParams) {
 	ctx := r.Context()
-	var prepared *auth.PreparedAuthorization
-	var clientIP string
-	var authorizer auth.Authorizer = c.Auth
-	if swag.BoolValue(params.Presign) {
-		user, err := auth.GetUser(ctx)
-		if err != nil {
-			writeError(w, r, http.StatusUnauthorized, ErrAuthenticatingRequest)
-			return
-		}
-		prepared, err = auth.PrepareAuthorization(ctx, c.Auth, user.Username)
-		if c.handleAPIError(ctx, w, r, err) {
-			return
-		}
-		authorizer = prepared
-		clientIP = httputil.ExtractClientIP(r.Header, r.RemoteAddr)
+	user, err := auth.GetUser(ctx)
+	if err != nil {
+		writeError(w, r, http.StatusUnauthorized, ErrAuthenticatingRequest)
+		return
 	}
-	if !c.authorizeWith(w, r, authorizer, permissions.Node{
+	prepared, err := auth.PrepareAuthorization(ctx, c.Auth, user.Username)
+	if c.handleAPIError(ctx, w, r, err) {
+		return
+	}
+	if !c.authorizeWith(w, r, prepared, permissions.Node{
 		Permission: permissions.Permission{
 			Action:   permissions.ListObjectsAction,
 			Resource: permissions.RepoArn(repository),
@@ -5119,7 +5112,6 @@ func (c *Controller) ListObjects(w http.ResponseWriter, r *http.Request, reposit
 	}, writeError) {
 		return
 	}
-	user, _ := auth.GetUser(ctx)
 	c.LogAction(ctx, "list_objects", r, repository, ref, "")
 
 	repo, err := c.Catalog.GetRepository(ctx, repository)
@@ -5135,6 +5127,7 @@ func (c *Controller) ListObjects(w http.ResponseWriter, r *http.Request, reposit
 		paginationAfter(params.After),
 		paginationDelimiter(params.Delimiter),
 		paginationAmount(params.Amount),
+		catalog.WithListEntriesPermissionFilter(ctx, prepared, user.Username, repository, httputil.ExtractClientIP(r.Header, r.RemoteAddr)),
 	)
 	if c.handleAPIError(ctx, w, r, err) {
 		return
@@ -5142,62 +5135,50 @@ func (c *Controller) ListObjects(w http.ResponseWriter, r *http.Request, reposit
 
 	objList := make([]apigen.ObjectStats, 0, len(res))
 	for _, entry := range res {
-		qk, err := c.BlockAdapter.ResolveNamespace(repo.StorageID, repo.StorageNamespace, entry.PhysicalAddress, entry.AddressType.ToIdentifierType())
-		if err != nil {
-			writeError(w, r, http.StatusInternalServerError, err)
-			return
-		}
-
 		if entry.CommonLevel {
 			objList = append(objList, apigen.ObjectStats{
 				Path:     entry.Path,
 				PathType: entryTypeCommonPrefix,
 			})
-		} else {
-			var mtime int64
-			if !entry.CreationDate.IsZero() {
-				mtime = entry.CreationDate.Unix()
-			}
-			objStat := apigen.ObjectStats{
-				Checksum:        entry.Checksum,
-				Mtime:           mtime,
-				Path:            entry.Path,
-				PhysicalAddress: qk.Format(),
-				PathType:        entryTypeObject,
-				SizeBytes:       swag.Int64(entry.Size),
-				ContentType:     swag.String(entry.ContentType),
-			}
-			if (params.UserMetadata == nil || *params.UserMetadata) && entry.Metadata != nil {
-				objStat.Metadata = &apigen.ObjectUserMetadata{AdditionalProperties: entry.Metadata}
-			}
-			if prepared != nil {
-				// check if the user has read permissions for this object
-				authResponse, err := prepared.Authorize(ctx, &auth.AuthorizationRequest{
-					Username:            user.Username,
-					RequiredPermissions: objectReadPermission(repository, entry.Path, entry),
-					ClientIP:            clientIP,
-				})
-				if c.handleAPIError(ctx, w, r, err) {
-					return
-				}
-				if authResponse.Allowed {
-					var expiry time.Time
-					objStat.PhysicalAddress, expiry, err = c.BlockAdapter.GetPreSignedURL(ctx, block.ObjectPointer{
-						StorageID:        repo.StorageID,
-						StorageNamespace: repo.StorageNamespace,
-						IdentifierType:   entry.AddressType.ToIdentifierType(),
-						Identifier:       entry.PhysicalAddress,
-					}, block.PreSignModeRead, entry.Path)
-					if c.handleAPIError(ctx, w, r, err) {
-						return
-					}
-					if !expiry.IsZero() {
-						objStat.PhysicalAddressExpiry = swag.Int64(expiry.Unix())
-					}
-				}
-			}
-			objList = append(objList, objStat)
+			continue
 		}
+		qk, err := c.BlockAdapter.ResolveNamespace(repo.StorageID, repo.StorageNamespace, entry.PhysicalAddress, entry.AddressType.ToIdentifierType())
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		var mtime int64
+		if !entry.CreationDate.IsZero() {
+			mtime = entry.CreationDate.Unix()
+		}
+		objStat := apigen.ObjectStats{
+			Checksum:        entry.Checksum,
+			Mtime:           mtime,
+			Path:            entry.Path,
+			PhysicalAddress: qk.Format(),
+			PathType:        entryTypeObject,
+			SizeBytes:       swag.Int64(entry.Size),
+			ContentType:     swag.String(entry.ContentType),
+		}
+		if (params.UserMetadata == nil || *params.UserMetadata) && entry.Metadata != nil {
+			objStat.Metadata = &apigen.ObjectUserMetadata{AdditionalProperties: entry.Metadata}
+		}
+		if swag.BoolValue(params.Presign) {
+			var expiry time.Time
+			objStat.PhysicalAddress, expiry, err = c.BlockAdapter.GetPreSignedURL(ctx, block.ObjectPointer{
+				StorageID:        repo.StorageID,
+				StorageNamespace: repo.StorageNamespace,
+				IdentifierType:   entry.AddressType.ToIdentifierType(),
+				Identifier:       entry.PhysicalAddress,
+			}, block.PreSignModeRead, entry.Path)
+			if c.handleAPIError(ctx, w, r, err) {
+				return
+			}
+			if !expiry.IsZero() {
+				objStat.PhysicalAddressExpiry = swag.Int64(expiry.Unix())
+			}
+		}
+		objList = append(objList, objStat)
 	}
 	response := apigen.ObjectStatsList{
 		Pagination: apigen.Pagination{

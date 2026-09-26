@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/treeverse/lakefs/pkg/auth/model"
 	oidcencoding "github.com/treeverse/lakefs/pkg/auth/oidc/encoding"
+	"github.com/treeverse/lakefs/pkg/auth/oidc/principaltags"
 	"github.com/treeverse/lakefs/pkg/kv/kvtest"
 	"github.com/treeverse/lakefs/pkg/logging"
 )
@@ -577,4 +579,79 @@ func stringValue(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func TestAuthenticateOIDCSessionPrincipalSnapshot(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		claims    oidcencoding.Claims
+		tags      principaltags.Tags
+		wantError bool
+	}{
+		{name: "tagless", claims: oidcencoding.Claims{}},
+		{name: "canonical tags", claims: oidcencoding.Claims{
+			principaltags.NamespaceClaim: principaltags.ToNestedClaim(principaltags.Tags{"Department": "Engineering"}),
+		}, tags: principaltags.Tags{"Department": "Engineering"}},
+		{name: "canonical tags override configured flattened claim", claims: oidcencoding.Claims{
+			principaltags.NamespaceClaim:                            principaltags.ToNestedClaim(principaltags.Tags{"Department": "Engineering"}),
+			"https://aws.amazon.com/tags/principal_tags/Department": "Finance",
+		}, tags: principaltags.Tags{"Department": "Engineering"}},
+		{name: "flattened session claim is not authoritative", claims: oidcencoding.Claims{
+			"https://aws.amazon.com/tags/principal_tags/Department": "Finance",
+		}},
+		{name: "malformed namespace", claims: oidcencoding.Claims{principaltags.NamespaceClaim: "bad"}, wantError: true},
+		{name: "malformed stored tag", claims: oidcencoding.Claims{
+			principaltags.NamespaceClaim: map[string]any{"principal_tags": map[string]any{"Department": []any{"A", "B"}}},
+		}, wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			externalID := oidcExternalID("https://issuer.example", "alice")
+			service := newOIDCSessionAuthService(&model.User{Username: "alice", ExternalID: &externalID, Source: "oidc"})
+			claims := test.claims
+			claims["iss"] = "https://issuer.example"
+			claims["sub"] = "alice"
+			claims["name"] = "Alice"
+			data, err := json.Marshal(claims)
+			require.NoError(t, err)
+			session := &sessions.Session{Values: map[interface{}]interface{}{IDTokenClaimsSessionKey: string(data)}}
+			MarkOIDCSessionClaimsCurrent(session, time.Now().Add(time.Hour))
+			result, err := AuthenticateOIDCSession(t.Context(), logging.Dummy(), newOIDCSessionProvisionerForTest(t, service), session, &OIDCConfig{
+				FriendlyNameClaimName: "name", PersistFriendlyName: true,
+			})
+			if test.wantError {
+				require.ErrorIs(t, err, ErrAuthenticatingRequest)
+				require.Nil(t, result)
+				require.Empty(t, service.friendlyNameUpdates, "reject invalid tags before resolving or updating the user")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, "alice", result.User.Username)
+			if len(test.tags) == 0 {
+				require.Empty(t, result.PrincipalTags)
+			} else {
+				require.Equal(t, test.tags, result.PrincipalTags)
+			}
+		})
+	}
+}
+
+func TestOIDCSessionSchemaRequiresExactVersion(t *testing.T) {
+	for _, version := range []int{2, 3, 4} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			session := &sessions.Session{Values: map[interface{}]interface{}{
+				IDTokenClaimsSessionKey: `{"iss":"https://issuer.example","sub":"alice"}`,
+			}}
+			MarkOIDCSessionClaimsCurrent(session, time.Now().Add(time.Hour))
+			session.Values[oidcClaimsSchemaVersionSessionKey] = version
+			claims, found, err := oidcClaimsFromSession(session, time.Now())
+			require.True(t, found)
+			if version == 3 {
+				require.NoError(t, err)
+				require.Equal(t, "alice", claims["sub"])
+			} else {
+				require.Error(t, err, "mixed schema versions must not accept each other's sessions")
+				require.Nil(t, claims)
+			}
+		})
+	}
 }

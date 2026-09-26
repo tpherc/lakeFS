@@ -83,7 +83,7 @@ func TestOIDCSessionReissueOnlyWhenEncodingUpgradeNeeded(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if user == nil || user.Username != username {
+		if user == nil || user.User.Username != username {
 			t.Fatalf("unexpected user: %#v", user)
 		}
 		if cookie := responseCookieByName(t, gotRec.Result(), auth.OIDCAuthSessionName); cookie != nil {

@@ -18,7 +18,11 @@ func NewEntryListingIterator(it EntryIterator, prefix Path, delimiter Path) Entr
 	if len(prefix) > 0 {
 		it = NewPrefixIterator(it, prefix)
 	}
+	return newEntryListingIterator(it, prefix, delimiter)
+}
 
+// newEntryListingIterator groups entries that have already been restricted to prefix.
+func newEntryListingIterator(it EntryIterator, prefix Path, delimiter Path) EntryListingIterator {
 	eli := &entryListingIterator{
 		it:        it,
 		prefix:    prefix.String(),
