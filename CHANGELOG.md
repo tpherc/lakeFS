@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.86.0
+
+:bug: Bugs Fixed:
+
+- Fixed a vulnerability that could allow users that don't have the `fs:ListRepositories` permission to list repositories via the S3 gateway API ([GHSA-gf2q-q6wc-x7fm](https://github.com/treeverse/lakeFS/security/advisories/GHSA-gf2q-q6wc-x7fm))
+
+## v1.85.0
+
+:new: What's new:
+
+- Adding a country field to the initial setup. (#10513, #10514)
+
+## v1.84.1
+
+:bug: Bugs Fixed:
+
+- Fixed a vulnerability that could allow unauthenticated users to overwrite communication preferences configured during setup. (#10499)
+- Fixed the traffic metrics category name. (#10497)
+
+## v1.84.0
+
+:new: What's new:
+- BI: Improved usage reporting and metrics (#10487)
+- Removed the option to subscribe to security updates during setup (#10484)
+
 ## v1.83.0
 
 :new: What's new:

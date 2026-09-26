@@ -10,8 +10,9 @@ Name | Type | Description | Notes
 **last_name** | Option<**String**> | the provided last name | [optional]
 **email** | Option<**String**> | the provided email | [optional]
 **company_name** | Option<**String**> | the provided company name | [optional]
+**country** | Option<**String**> | the provided country | [optional]
 **feature_updates** | Option<**bool**> | user preference to receive feature updates | [optional]
-**security_updates** | Option<**bool**> | user preference to receive security updates | [optional]
+**security_updates** | Option<**bool**> | Deprecated: no longer used | [optional]
 
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
 

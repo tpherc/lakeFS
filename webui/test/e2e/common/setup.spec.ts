@@ -30,6 +30,14 @@ test.describe("Setup Page Validation", () => {
         await expect(error).toBeVisible();
     });
 
+    test("country is required", async ({ page }) => {
+        const setupPage = new SetupPage(page);
+        await setupPage.goto();
+        await setupPage.fillForm("test@treeverse.io", "admin", true, "", "", "", "");
+        const error = page.getByText(setupPage.countryErrorSelectorText);
+        await expect(error).toBeVisible();
+    });
+
     test("shows error for free email", async ({ page }) => {
         const setupPage = new SetupPage(page);
         await setupPage.goto();

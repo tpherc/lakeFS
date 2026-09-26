@@ -16,6 +16,7 @@ import (
 	gatewayerrors "github.com/treeverse/lakefs/pkg/gateway/errors"
 	"github.com/treeverse/lakefs/pkg/gateway/multipart"
 	"github.com/treeverse/lakefs/pkg/gateway/operations"
+	gatewaypath "github.com/treeverse/lakefs/pkg/gateway/path"
 	"github.com/treeverse/lakefs/pkg/gateway/sig"
 	"github.com/treeverse/lakefs/pkg/httputil"
 	"github.com/treeverse/lakefs/pkg/logging"
@@ -180,7 +181,13 @@ func RepoOperationHandler(sc *ServerContext, handler operations.RepoOperationHan
 		o := ctx.Value(ContextKeyOperation).(*operations.Operation)
 		perms, err := handler.RequiredPermissions(req, repo.Name)
 		if err != nil {
-			_ = o.EncodeError(w, req, err, gatewayerrors.ErrAccessDenied.ToAPIErr())
+			// A request that cannot be classified is rejected without being authorized. A malformed
+			// path is the client's mistake, so report it as the S3 API does rather than as a denial.
+			if errors.Is(err, gatewaypath.ErrPathMalformed) {
+				_ = o.EncodeError(w, req, err, gatewayerrors.ErrBadRequest.ToAPIErr())
+			} else {
+				_ = o.EncodeError(w, req, err, gatewayerrors.ErrAccessDenied.ToAPIErr())
+			}
 			return
 		}
 		authOp := authorize(w, req, sc.authService, perms)
