@@ -6607,8 +6607,7 @@ public class AuthApi {
          * @http.response.details
          <table summary="Response Details" border="1">
             <tr><td> Status Code </td><td> Description </td><td> Response Headers </td></tr>
-            <tr><td> 302 </td><td> successfully got token </td><td>  -  </td></tr>
-            <tr><td> 401 </td><td> failed to exchange authorization code for token </td><td>  -  </td></tr>
+            <tr><td> 302 </td><td> redirects after successful callback or back to login on callback failure </td><td>  -  </td></tr>
             <tr><td> 0 </td><td> Internal Server Error </td><td>  -  </td></tr>
          </table>
          */
@@ -6623,8 +6622,7 @@ public class AuthApi {
          * @http.response.details
          <table summary="Response Details" border="1">
             <tr><td> Status Code </td><td> Description </td><td> Response Headers </td></tr>
-            <tr><td> 302 </td><td> successfully got token </td><td>  -  </td></tr>
-            <tr><td> 401 </td><td> failed to exchange authorization code for token </td><td>  -  </td></tr>
+            <tr><td> 302 </td><td> redirects after successful callback or back to login on callback failure </td><td>  -  </td></tr>
             <tr><td> 0 </td><td> Internal Server Error </td><td>  -  </td></tr>
          </table>
          */
@@ -6640,8 +6638,7 @@ public class AuthApi {
          * @http.response.details
          <table summary="Response Details" border="1">
             <tr><td> Status Code </td><td> Description </td><td> Response Headers </td></tr>
-            <tr><td> 302 </td><td> successfully got token </td><td>  -  </td></tr>
-            <tr><td> 401 </td><td> failed to exchange authorization code for token </td><td>  -  </td></tr>
+            <tr><td> 302 </td><td> redirects after successful callback or back to login on callback failure </td><td>  -  </td></tr>
             <tr><td> 0 </td><td> Internal Server Error </td><td>  -  </td></tr>
          </table>
          */
@@ -6657,8 +6654,7 @@ public class AuthApi {
          * @http.response.details
          <table summary="Response Details" border="1">
             <tr><td> Status Code </td><td> Description </td><td> Response Headers </td></tr>
-            <tr><td> 302 </td><td> successfully got token </td><td>  -  </td></tr>
-            <tr><td> 401 </td><td> failed to exchange authorization code for token </td><td>  -  </td></tr>
+            <tr><td> 302 </td><td> redirects after successful callback or back to login on callback failure </td><td>  -  </td></tr>
             <tr><td> 0 </td><td> Internal Server Error </td><td>  -  </td></tr>
          </table>
          */
@@ -6674,8 +6670,7 @@ public class AuthApi {
      * @http.response.details
      <table summary="Response Details" border="1">
         <tr><td> Status Code </td><td> Description </td><td> Response Headers </td></tr>
-        <tr><td> 302 </td><td> successfully got token </td><td>  -  </td></tr>
-        <tr><td> 401 </td><td> failed to exchange authorization code for token </td><td>  -  </td></tr>
+        <tr><td> 302 </td><td> redirects after successful callback or back to login on callback failure </td><td>  -  </td></tr>
         <tr><td> 0 </td><td> Internal Server Error </td><td>  -  </td></tr>
      </table>
      */

@@ -52,6 +52,10 @@ import io.lakefs.clients.sdk.JSON;
  */
 @javax.annotation.Generated(value = "org.openapitools.codegen.languages.JavaClientCodegen")
 public class StagingLocation {
+  public static final String SERIALIZED_NAME_STORAGE_ID = "storage_id";
+  @SerializedName(SERIALIZED_NAME_STORAGE_ID)
+  private String storageId;
+
   public static final String SERIALIZED_NAME_PHYSICAL_ADDRESS = "physical_address";
   @SerializedName(SERIALIZED_NAME_PHYSICAL_ADDRESS)
   private String physicalAddress;
@@ -66,6 +70,27 @@ public class StagingLocation {
 
   public StagingLocation() {
   }
+
+  public StagingLocation storageId(String storageId) {
+    
+    this.storageId = storageId;
+    return this;
+  }
+
+   /**
+   * Configured backend containing the object. Staging allocation returns the repository backend; omitted or empty on link uses the repository backend.
+   * @return storageId
+  **/
+  @javax.annotation.Nullable
+  public String getStorageId() {
+    return storageId;
+  }
+
+
+  public void setStorageId(String storageId) {
+    this.storageId = storageId;
+  }
+
 
   public StagingLocation physicalAddress(String physicalAddress) {
     
@@ -184,7 +209,8 @@ public class StagingLocation {
       return false;
     }
     StagingLocation stagingLocation = (StagingLocation) o;
-    return Objects.equals(this.physicalAddress, stagingLocation.physicalAddress) &&
+    return Objects.equals(this.storageId, stagingLocation.storageId) &&
+        Objects.equals(this.physicalAddress, stagingLocation.physicalAddress) &&
         Objects.equals(this.presignedUrl, stagingLocation.presignedUrl) &&
         Objects.equals(this.presignedUrlExpiry, stagingLocation.presignedUrlExpiry)&&
         Objects.equals(this.additionalProperties, stagingLocation.additionalProperties);
@@ -196,7 +222,7 @@ public class StagingLocation {
 
   @Override
   public int hashCode() {
-    return Objects.hash(physicalAddress, presignedUrl, presignedUrlExpiry, additionalProperties);
+    return Objects.hash(storageId, physicalAddress, presignedUrl, presignedUrlExpiry, additionalProperties);
   }
 
   private static <T> int hashCodeNullable(JsonNullable<T> a) {
@@ -210,6 +236,7 @@ public class StagingLocation {
   public String toString() {
     StringBuilder sb = new StringBuilder();
     sb.append("class StagingLocation {\n");
+    sb.append("    storageId: ").append(toIndentedString(storageId)).append("\n");
     sb.append("    physicalAddress: ").append(toIndentedString(physicalAddress)).append("\n");
     sb.append("    presignedUrl: ").append(toIndentedString(presignedUrl)).append("\n");
     sb.append("    presignedUrlExpiry: ").append(toIndentedString(presignedUrlExpiry)).append("\n");
@@ -236,6 +263,7 @@ public class StagingLocation {
   static {
     // a set of all properties/fields (JSON key names)
     openapiFields = new HashSet<String>();
+    openapiFields.add("storage_id");
     openapiFields.add("physical_address");
     openapiFields.add("presigned_url");
     openapiFields.add("presigned_url_expiry");
@@ -257,6 +285,9 @@ public class StagingLocation {
         }
       }
         JsonObject jsonObj = jsonElement.getAsJsonObject();
+      if ((jsonObj.get("storage_id") != null && !jsonObj.get("storage_id").isJsonNull()) && !jsonObj.get("storage_id").isJsonPrimitive()) {
+        throw new IllegalArgumentException(String.format("Expected the field `storage_id` to be a primitive type in the JSON string but got `%s`", jsonObj.get("storage_id").toString()));
+      }
       if ((jsonObj.get("physical_address") != null && !jsonObj.get("physical_address").isJsonNull()) && !jsonObj.get("physical_address").isJsonPrimitive()) {
         throw new IllegalArgumentException(String.format("Expected the field `physical_address` to be a primitive type in the JSON string but got `%s`", jsonObj.get("physical_address").toString()));
       }

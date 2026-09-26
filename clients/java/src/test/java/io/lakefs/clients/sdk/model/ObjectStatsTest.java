@@ -40,6 +40,14 @@ public class ObjectStatsTest {
     }
 
     /**
+     * Test the property 'storageId'
+     */
+    @Test
+    public void storageIdTest() {
+        // TODO: test storageId
+    }
+
+    /**
      * Test the property 'path'
      */
     @Test

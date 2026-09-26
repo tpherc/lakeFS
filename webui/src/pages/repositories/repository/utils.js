@@ -27,4 +27,11 @@ function getRepoStorageConfig(configs, repo) {
     }
 }
 
-export { getRepoStorageConfig };
+function getObjectStorageConfig(configs, repo, object) {
+    if (object?.storage_id) {
+        return configs?.find((config) => config.blockstore_id === object.storage_id) ?? null;
+    }
+    return getRepoStorageConfig(configs, repo).storageConfig;
+}
+
+export { getRepoStorageConfig, getObjectStorageConfig };

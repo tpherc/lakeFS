@@ -37,6 +37,7 @@ class TestStagingLocation(unittest.TestCase):
         model = StagingLocation()  # noqa: E501
         if include_optional:
             return StagingLocation(
+                storage_id = '',
                 physical_address = '',
                 presigned_url = '',
                 presigned_url_expiry = 56

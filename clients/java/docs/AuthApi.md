@@ -3319,8 +3319,7 @@ No authorization required
 ### HTTP response details
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
-| **302** | successfully got token |  -  |
-| **401** | failed to exchange authorization code for token |  -  |
+| **302** | redirects after successful callback or back to login on callback failure |  -  |
 | **0** | Internal Server Error |  -  |
 
 <a id="setGroupACL"></a>

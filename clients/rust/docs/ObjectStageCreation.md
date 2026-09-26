@@ -4,6 +4,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**storage_id** | Option<**String**> | Configured backend containing the source object. Omitted or empty uses the repository backend. | [optional]
 **physical_address** | **String** |  | 
 **checksum** | **String** |  | 
 **size_bytes** | **i64** |  | 

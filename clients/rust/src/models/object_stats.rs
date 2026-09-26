@@ -12,6 +12,9 @@ use crate::models;
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ObjectStats {
+    /// Effective configured backend for this object. Omitted for common-prefix entries and legacy single-store configurations.
+    #[serde(rename = "storage_id", skip_serializing_if = "Option::is_none")]
+    pub storage_id: Option<String>,
     #[serde(rename = "path")]
     pub path: String,
     #[serde(rename = "path_type")]
@@ -40,6 +43,7 @@ pub struct ObjectStats {
 impl ObjectStats {
     pub fn new(path: String, path_type: PathType, physical_address: String, checksum: String, mtime: i64) -> ObjectStats {
         ObjectStats {
+            storage_id: None,
             path,
             path_type,
             physical_address,

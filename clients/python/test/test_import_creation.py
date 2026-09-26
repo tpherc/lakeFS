@@ -39,6 +39,7 @@ class TestImportCreation(unittest.TestCase):
             return ImportCreation(
                 paths = [
                     lakefs_sdk.models.import_location.ImportLocation(
+                        storage_id = '', 
                         type = 'common_prefix', 
                         path = 's3://my-bucket/production/collections/', 
                         destination = 'collections/', )
@@ -57,6 +58,7 @@ class TestImportCreation(unittest.TestCase):
             return ImportCreation(
                 paths = [
                     lakefs_sdk.models.import_location.ImportLocation(
+                        storage_id = '', 
                         type = 'common_prefix', 
                         path = 's3://my-bucket/production/collections/', 
                         destination = 'collections/', )

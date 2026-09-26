@@ -37,6 +37,7 @@ class TestObjectStats(unittest.TestCase):
         model = ObjectStats()  # noqa: E501
         if include_optional:
             return ObjectStats(
+                storage_id = '',
                 path = '',
                 path_type = 'common_prefix',
                 physical_address = '',

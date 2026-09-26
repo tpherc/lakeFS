@@ -12,10 +12,13 @@ use crate::models;
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ImportLocation {
+    /// Configured backend containing this source. Omitted or empty uses the repository backend.
+    #[serde(rename = "storage_id", skip_serializing_if = "Option::is_none")]
+    pub storage_id: Option<String>,
     /// Path type, can either be 'common_prefix' or 'object'
     #[serde(rename = "type")]
     pub r#type: Type,
-    /// A source location to a 'common_prefix' or to a single object. Must match the lakeFS installation blockstore type.
+    /// A source location to a 'common_prefix' or to a single object. Must match the selected backend's native address format.
     #[serde(rename = "path")]
     pub path: String,
     /// Destination for the imported objects on the branch. Must be a relative path to the branch. If the type is an 'object', the destination is the exact object name under the branch. If the type is a 'common_prefix', the destination is the prefix under the branch. 
@@ -26,6 +29,7 @@ pub struct ImportLocation {
 impl ImportLocation {
     pub fn new(r#type: Type, path: String, destination: String) -> ImportLocation {
         ImportLocation {
+            storage_id: None,
             r#type,
             path,
             destination,

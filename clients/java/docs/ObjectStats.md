@@ -7,6 +7,7 @@
 
 | Name | Type | Description | Notes |
 |------------ | ------------- | ------------- | -------------|
+|**storageId** | **String** | Effective configured backend for this object. Omitted for common-prefix entries and legacy single-store configurations. |  [optional] |
 |**path** | **String** |  |  |
 |**pathType** | [**PathTypeEnum**](#PathTypeEnum) |  |  |
 |**physicalAddress** | **String** | The location of the object on the underlying object store. Formatted as a native URI with the object store type as scheme (\&quot;s3://...\&quot;, \&quot;gs://...\&quot;, etc.) Or, in the case of presign&#x3D;true, will be an HTTP URL to be consumed via regular HTTP GET  |  |

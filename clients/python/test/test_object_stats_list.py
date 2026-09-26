@@ -44,6 +44,7 @@ class TestObjectStatsList(unittest.TestCase):
                     max_per_page = 0, ),
                 results = [
                     lakefs_sdk.models.object_stats.ObjectStats(
+                        storage_id = '', 
                         path = '', 
                         path_type = 'common_prefix', 
                         physical_address = '', 
@@ -66,6 +67,7 @@ class TestObjectStatsList(unittest.TestCase):
                     max_per_page = 0, ),
                 results = [
                     lakefs_sdk.models.object_stats.ObjectStats(
+                        storage_id = '', 
                         path = '', 
                         path_type = 'common_prefix', 
                         physical_address = '', 

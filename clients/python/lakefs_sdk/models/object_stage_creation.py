@@ -29,6 +29,7 @@ class ObjectStageCreation(BaseModel):
     """
     ObjectStageCreation
     """
+    storage_id: Optional[StrictStr] = Field(None, description="Configured backend containing the source object. Omitted or empty uses the repository backend.")
     physical_address: StrictStr = Field(...)
     checksum: StrictStr = Field(...)
     size_bytes: StrictInt = Field(...)
@@ -36,7 +37,7 @@ class ObjectStageCreation(BaseModel):
     metadata: Optional[Dict[str, StrictStr]] = None
     content_type: Optional[StrictStr] = Field(None, description="Object media type")
     force: Optional[StrictBool] = False
-    __properties = ["physical_address", "checksum", "size_bytes", "mtime", "metadata", "content_type", "force"]
+    __properties = ["storage_id", "physical_address", "checksum", "size_bytes", "mtime", "metadata", "content_type", "force"]
 
     class Config:
         """Pydantic configuration"""
@@ -74,6 +75,7 @@ class ObjectStageCreation(BaseModel):
             return ObjectStageCreation.parse_obj(obj)
 
         _obj = ObjectStageCreation.parse_obj({
+            "storage_id": obj.get("storage_id"),
             "physical_address": obj.get("physical_address"),
             "checksum": obj.get("checksum"),
             "size_bytes": obj.get("size_bytes"),

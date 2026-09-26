@@ -37,6 +37,7 @@ class TestObjectStageCreation(unittest.TestCase):
         model = ObjectStageCreation()  # noqa: E501
         if include_optional:
             return ObjectStageCreation(
+                storage_id = '',
                 physical_address = '',
                 checksum = '',
                 size_bytes = 56,

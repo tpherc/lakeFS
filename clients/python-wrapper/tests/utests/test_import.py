@@ -51,3 +51,16 @@ class TestImportManager:
 
             # try again and expect no error
             mgr.wait()
+
+    def test_mixed_sources_preserve_explicit_backends(self, monkeypatch):
+        manager = ImportManager("repo", "main", client=get_test_client())
+        manager.prefix("s3://raw/video/", "video/", storage_id="s3-source")
+        manager.object("gs://metadata/record.json", "metadata.json", storage_id="gcs-source")
+        manager.object("s3://home/legacy", "legacy")
+        def start(*_, **kwargs):
+            sources = kwargs["import_creation"].paths
+            assert [source.storage_id for source in sources] == ["s3-source", "gcs-source", None]
+            assert [source.type for source in sources] == ["common_prefix", "object", "object"]
+            return lakefs_sdk.ImportCreationResponse(id="mixed-import")
+        monkeypatch.setattr(lakefs_sdk.ImportApi, "import_start", start)
+        assert manager.start() == "mixed-import"

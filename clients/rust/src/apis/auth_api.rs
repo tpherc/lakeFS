@@ -419,7 +419,6 @@ pub enum LoginError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum OauthCallbackError {
-    Status401(),
     DefaultResponse(models::Error),
     UnknownValue(serde_json::Value),
 }

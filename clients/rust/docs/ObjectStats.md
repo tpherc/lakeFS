@@ -4,6 +4,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**storage_id** | Option<**String**> | Effective configured backend for this object. Omitted for common-prefix entries and legacy single-store configurations. | [optional]
 **path** | **String** |  | 
 **path_type** | **String** |  | 
 **physical_address** | **String** | The location of the object on the underlying object store. Formatted as a native URI with the object store type as scheme (\"s3://...\", \"gs://...\", etc.) Or, in the case of presign=true, will be an HTTP URL to be consumed via regular HTTP GET  | 

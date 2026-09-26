@@ -198,17 +198,16 @@ func handleUploadPart(w http.ResponseWriter, req *http.Request, o *PathOperation
 			}
 		}
 
-		if srcRepo.StorageID != o.Repository.StorageID {
-			o.Log(req).WithField("copy_source", copySource).Error("copy between repos with different StorageIDs is not allowed")
+		src, err := block.NewObjectPointer(ent.StorageID, srcRepo.StorageID,
+			srcRepo.StorageNamespace, ent.PhysicalAddress, ent.AddressType.ToIdentifierType())
+		if err != nil {
 			_ = o.EncodeError(w, req, err, gatewayErrors.Codes.ToAPIErr(gatewayErrors.ErrInvalidCopySource))
 			return
 		}
-
-		src := block.ObjectPointer{
-			StorageID:        srcRepo.StorageID,
-			StorageNamespace: srcRepo.StorageNamespace,
-			IdentifierType:   ent.AddressType.ToIdentifierType(),
-			Identifier:       ent.PhysicalAddress,
+		if src.StorageID != o.Repository.StorageID {
+			o.Log(req).WithField("copy_source", copySource).Error("copy between different storage backends is not supported")
+			_ = o.EncodeError(w, req, block.ErrOperationNotSupported, gatewayErrors.Codes.ToAPIErr(gatewayErrors.ErrInvalidCopySource))
+			return
 		}
 
 		dst := block.ObjectPointer{

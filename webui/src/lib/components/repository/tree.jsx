@@ -39,6 +39,8 @@ import { ClipboardButton, copyTextToClipboard, AlertError, Loading, TooltipButto
 import { useAPI } from '../../hooks/api';
 import { CommitInfoCard } from './commits';
 import MountModal from './mountModal';
+import { useConfigContext } from '../../hooks/configProvider';
+import { getObjectStorageConfig } from '../../../pages/repositories/repository/utils';
 
 export const humanSize = (bytes) => {
     if (!bytes) return '0.0 B';
@@ -48,7 +50,11 @@ export const humanSize = (bytes) => {
 
 const Na = () => <span>&mdash;</span>;
 
-const EntryRowActions = ({ repo, reference, entry, onDelete, presign, presign_ui = false }) => {
+const EntryRowActions = ({ repo, reference, entry, onDelete }) => {
+    const { config } = useConfigContext();
+    const storageConfig = getObjectStorageConfig(config?.storages, repo, entry);
+    const presign = storageConfig?.pre_sign_support ?? false;
+    const presignUI = storageConfig?.pre_sign_support_ui ?? false;
     const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
     const handleCloseDeleteConfirmation = () => setShowDeleteConfirmation(false);
     const handleShowDeleteConfirmation = () => setShowDeleteConfirmation(true);
@@ -119,7 +125,7 @@ const EntryRowActions = ({ repo, reference, entry, onDelete, presign, presign_ui
                             reference={reference}
                             repoId={repo.id}
                             as={Dropdown.Item}
-                            presign={presign_ui}
+                            presign={presignUI}
                         >
                             <DownloadIcon /> Download
                         </PathLink>
@@ -458,7 +464,7 @@ const PathLink = ({ repoId, reference, path, children, presign = false, as = nul
     return React.createElement(as, { href: link, download: name }, children);
 };
 
-const EntryRow = ({ config, repo, reference, path, entry, onDelete, showActions }) => {
+const EntryRow = ({ repo, reference, path, entry, onDelete, showActions }) => {
     let rowClass = 'change-entry-row ';
     switch (entry.diff_type) {
         case 'changed':
@@ -563,16 +569,7 @@ const EntryRow = ({ config, repo, reference, path, entry, onDelete, showActions 
 
     let entryActions;
     if (showActions && entry.diff_type !== 'removed') {
-        entryActions = (
-            <EntryRowActions
-                repo={repo}
-                reference={reference}
-                entry={entry}
-                onDelete={onDelete}
-                presign={config.config.pre_sign_support}
-                presign_ui={config.config.pre_sign_support_ui}
-            />
-        );
+        entryActions = <EntryRowActions repo={repo} reference={reference} entry={entry} onDelete={onDelete} />;
     }
 
     return (
@@ -885,8 +882,9 @@ export const URINavigator = ({
     );
 };
 
-const GetStarted = ({ config, onUpload, onImport, readOnly = false }) => {
-    const importDisabled = !config.config.import_support;
+const GetStarted = ({ onUpload, onImport, readOnly = false }) => {
+    const { config: serverConfig } = useConfigContext();
+    const importDisabled = !serverConfig?.storages?.some((storage) => storage.import_support);
 
     return (
         <Container className="get-started-container pb-5">
@@ -906,7 +904,7 @@ const GetStarted = ({ config, onUpload, onImport, readOnly = false }) => {
                                     <DownloadIcon size={24} />
                                 </div>
                                 <Card.Title>Import Data</Card.Title>
-                                <Card.Text>Import existing data from {config.config.blockstore_type}</Card.Text>
+                                <Card.Text>Import existing data from configured storage</Card.Text>
                                 <Button
                                     variant="primary"
                                     className="mt-auto"

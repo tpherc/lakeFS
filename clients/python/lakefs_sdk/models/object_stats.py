@@ -29,6 +29,7 @@ class ObjectStats(BaseModel):
     """
     ObjectStats
     """
+    storage_id: Optional[StrictStr] = Field(None, description="Effective configured backend for this object. Omitted for common-prefix entries and legacy single-store configurations.")
     path: StrictStr = Field(...)
     path_type: StrictStr = Field(...)
     physical_address: StrictStr = Field(..., description="The location of the object on the underlying object store. Formatted as a native URI with the object store type as scheme (\"s3://...\", \"gs://...\", etc.) Or, in the case of presign=true, will be an HTTP URL to be consumed via regular HTTP GET ")
@@ -38,7 +39,7 @@ class ObjectStats(BaseModel):
     mtime: StrictInt = Field(..., description="Unix Epoch in seconds")
     metadata: Optional[Dict[str, StrictStr]] = None
     content_type: Optional[StrictStr] = Field(None, description="Object media type")
-    __properties = ["path", "path_type", "physical_address", "physical_address_expiry", "checksum", "size_bytes", "mtime", "metadata", "content_type"]
+    __properties = ["storage_id", "path", "path_type", "physical_address", "physical_address_expiry", "checksum", "size_bytes", "mtime", "metadata", "content_type"]
 
     @validator('path_type')
     def path_type_validate_enum(cls, value):
@@ -83,6 +84,7 @@ class ObjectStats(BaseModel):
             return ObjectStats.parse_obj(obj)
 
         _obj = ObjectStats.parse_obj({
+            "storage_id": obj.get("storage_id"),
             "path": obj.get("path"),
             "path_type": obj.get("path_type"),
             "physical_address": obj.get("physical_address"),

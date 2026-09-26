@@ -7,6 +7,7 @@
 
 | Name | Type | Description | Notes |
 |------------ | ------------- | ------------- | -------------|
+|**storageId** | **String** | Configured backend containing the source object. Omitted or empty uses the repository backend. |  [optional] |
 |**physicalAddress** | **String** |  |  |
 |**checksum** | **String** |  |  |
 |**sizeBytes** | **Long** |  |  |

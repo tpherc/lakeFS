@@ -18,14 +18,14 @@ var fsCatCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		pathURI := MustParsePathURI("path URI", args[0])
 		client := getClient()
-		preSignMode := getPresignMode(cmd, client, pathURI.Repository)
+		preSignMode := getObjectPresignMode(cmd, client, pathURI)
 
 		var err error
 		var body io.ReadCloser
 		var resp *http.Response
 		resp, err = client.GetObject(cmd.Context(), pathURI.Repository, pathURI.Ref, &apigen.GetObjectParams{
 			Path:    *pathURI.Path,
-			Presign: swag.Bool(preSignMode.Enabled),
+			Presign: swag.Bool(preSignMode),
 		})
 		if err != nil {
 			DieErr(err)

@@ -8230,9 +8230,8 @@ paths:
       operationId: oauthCallback
       responses:
         "302":
-          description: successfully got token
-        "401":
-          description: failed to exchange authorization code for token
+          description: redirects after successful callback or back to login on callback
+            failure
         default:
           content:
             application/json:
@@ -8624,11 +8623,16 @@ components:
           key: metadata
         size_bytes: 6
         content_type: content_type
+        storage_id: storage_id
         physical_address_expiry: 0
         checksum: checksum
         path_type: common_prefix
         mtime: 1
       properties:
+        storage_id:
+          description: Effective configured backend for this object. Omitted for common-prefix
+            entries and legacy single-store configurations.
+          type: string
         path:
           type: string
         path_type:
@@ -8693,6 +8697,7 @@ components:
             key: metadata
           size_bytes: 6
           content_type: content_type
+          storage_id: storage_id
           physical_address_expiry: 0
           checksum: checksum
           path_type: common_prefix
@@ -8703,6 +8708,7 @@ components:
             key: metadata
           size_bytes: 6
           content_type: content_type
+          storage_id: storage_id
           physical_address_expiry: 0
           checksum: checksum
           path_type: common_prefix
@@ -8763,10 +8769,15 @@ components:
           key: metadata
         size_bytes: 0
         content_type: content_type
+        storage_id: storage_id
         checksum: checksum
         force: false
         mtime: 6
       properties:
+        storage_id:
+          description: Configured backend containing the source object. Omitted or
+            empty uses the repository backend.
+          type: string
         physical_address:
           type: string
         checksum:
@@ -10423,9 +10434,15 @@ components:
       description: location for placing an object when staging it
       example:
         physical_address: physical_address
+        storage_id: storage_id
         presigned_url: presigned_url
         presigned_url_expiry: 0
       properties:
+        storage_id:
+          description: Configured backend containing the object. Staging allocation
+            returns the repository backend; omitted or empty on link uses the repository
+            backend.
+          type: string
         physical_address:
           type: string
         presigned_url:
@@ -10456,6 +10473,7 @@ components:
         mtime: 6
         staging:
           physical_address: physical_address
+          storage_id: storage_id
           presigned_url: presigned_url
           presigned_url_expiry: 0
       properties:
@@ -10619,6 +10637,10 @@ components:
       type: object
     ImportLocation:
       properties:
+        storage_id:
+          description: Configured backend containing this source. Omitted or empty
+            uses the repository backend.
+          type: string
         type:
           description: "Path type, can either be 'common_prefix' or 'object'"
           enum:
@@ -10627,7 +10649,7 @@ components:
           type: string
         path:
           description: A source location to a 'common_prefix' or to a single object.
-            Must match the lakeFS installation blockstore type.
+            Must match the selected backend's native address format.
           example: s3://my-bucket/production/collections/
           type: string
         destination:

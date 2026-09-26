@@ -6,12 +6,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/treeverse/lakefs/pkg/block"
 	"github.com/treeverse/lakefs/pkg/graveler"
 	"github.com/xitongsys/parquet-go/parquet"
 	"github.com/xitongsys/parquet-go/writer"
 )
 
-func gcWriteUncommitted(ctx context.Context, store Store, repository *graveler.RepositoryRecord, w *UncommittedWriter, mark *GCUncommittedMark, runID string, maxFileSize int64, prepareDuration time.Duration) (*GCUncommittedMark, bool, error) {
+func gcWriteUncommitted(ctx context.Context, store Store, repository *graveler.RepositoryRecord, ownership storageOwnership, w *UncommittedWriter, mark *GCUncommittedMark, runID string, maxFileSize int64, prepareDuration time.Duration) (*GCUncommittedMark, bool, error) {
 	pw, err := writer.NewParquetWriterFromWriter(w, new(UncommittedParquetObject), gcParquetParallelNum)
 	if err != nil {
 		return nil, false, err
@@ -35,7 +36,7 @@ func gcWriteUncommitted(ctx context.Context, store Store, repository *graveler.R
 	hasData := false
 	startTime := time.Now()
 	for branchIterator.Next() {
-		nextMark, count, err = processBranch(ctx, store, repository, branchIterator.Value().BranchID, runID, pw, normalizedStorageNamespace, maxFileSize, prepareDuration, w, count, mark, startTime)
+		nextMark, count, err = processBranch(ctx, store, repository, ownership, branchIterator.Value().BranchID, runID, pw, normalizedStorageNamespace, maxFileSize, prepareDuration, w, count, mark, startTime)
 		if err != nil && !errors.Is(err, graveler.ErrBranchNotFound) {
 			// return on error, unless its a branch not found error.
 			// on branch not found, fall through to the next branch (next mark nil on error) to keep duration check.
@@ -81,7 +82,7 @@ func normalizeStorageNamespace(namespace string) string {
 	return namespace
 }
 
-func processBranch(ctx context.Context, store Store, repository *graveler.RepositoryRecord, branchID graveler.BranchID, runID string, parquetWriter *writer.ParquetWriter, normalizedStorageNamespace string, maxFileSize int64, prepareDuration time.Duration, writer *UncommittedWriter, count int, mark *GCUncommittedMark, startTime time.Time) (*GCUncommittedMark, int, error) {
+func processBranch(ctx context.Context, store Store, repository *graveler.RepositoryRecord, ownership storageOwnership, branchID graveler.BranchID, runID string, parquetWriter *writer.ParquetWriter, normalizedStorageNamespace string, maxFileSize int64, prepareDuration time.Duration, writer *UncommittedWriter, count int, mark *GCUncommittedMark, startTime time.Time) (*GCUncommittedMark, int, error) {
 	diffIterator, err := store.DiffUncommitted(ctx, repository, branchID)
 	if err != nil {
 		return nil, 0, err
@@ -107,13 +108,28 @@ func processBranch(ctx context.Context, store Store, repository *graveler.Reposi
 			return nil, 0, err
 		}
 
-		// Skip non-relative addresses outside the storage namespace
+		obj, err := block.NewObjectPointer(entry.StorageId, repository.StorageID.String(), repository.StorageNamespace.String(), entry.Address, addressTypeToCatalog(entry.AddressType).ToIdentifierType())
+		if err != nil {
+			return nil, 0, err
+		}
 		entryAddress := entry.Address
 		if entry.AddressType != Entry_RELATIVE {
-			if !strings.HasPrefix(entry.Address, normalizedStorageNamespace) {
+			fullAddress, err := obj.FullAddress()
+			if err != nil {
+				return nil, 0, err
+			}
+			var owned bool
+			entryAddress, owned, err = ownership.ownedRelativeAddress(repository.StorageID.String(), normalizedStorageNamespace, entry.StorageId, fullAddress)
+			if err != nil {
+				// Legacy FULL values that are not native addresses never named home bytes.
+				if errors.Is(err, block.ErrInvalidAddress) && obj.StorageID == repository.StorageID.String() {
+					continue
+				}
+				return nil, 0, err
+			}
+			if !owned {
 				continue
 			}
-			entryAddress = entryAddress[len(normalizedStorageNamespace):]
 		}
 
 		count++

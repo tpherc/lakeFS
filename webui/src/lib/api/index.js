@@ -1460,13 +1460,14 @@ class Import {
         return response.json();
     }
 
-    async create(repoId, branchId, source, prepend, commitMessage, commitMetadata = {}) {
+    async create(repoId, branchId, source, prepend, commitMessage, commitMetadata = {}, storageID) {
         const body = {
             paths: [
                 {
                     path: source,
                     destination: prepend,
                     type: 'common_prefix',
+                    storage_id: storageID,
                 },
             ],
             commit: {

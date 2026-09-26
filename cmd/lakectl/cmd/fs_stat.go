@@ -16,11 +16,11 @@ var fsStatCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		pathURI := MustParsePathURI("path URI", args[0])
 		client := getClient()
-		preSignMode := getPresignMode(cmd, client, pathURI.Repository)
+		preSignMode := getObjectPresignMode(cmd, client, pathURI)
 
 		resp, err := client.StatObjectWithResponse(cmd.Context(), pathURI.Repository, pathURI.Ref, &apigen.StatObjectParams{
 			Path:         *pathURI.Path,
-			Presign:      swag.Bool(preSignMode.Enabled),
+			Presign:      swag.Bool(preSignMode),
 			UserMetadata: swag.Bool(true),
 		})
 		DieOnErrorOrUnexpectedStatusCode(resp, err, http.StatusOK)
@@ -36,7 +36,8 @@ const fsStatTemplate = `Path: {{.Path | yellow }}
 Modified Time: {{.Mtime|date}}
 Size: {{ .SizeBytes }} bytes
 Human Size: {{ .SizeBytes|human_bytes }}
-Physical Address: {{ .PhysicalAddress }}
+Physical Address: {{ .PhysicalAddress }}{{ if .StorageId }}
+Storage ID: {{ .StorageId }}{{ end }}
 {{- if .PhysicalAddressExpiry }}
 Physical Address Expires: {{ .PhysicalAddressExpiry|date }}{{end}}
 Checksum: {{ .Checksum }}

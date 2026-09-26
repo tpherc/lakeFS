@@ -5,8 +5,9 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**storage_id** | **str** | Configured backend containing this source. Omitted or empty uses the repository backend. | [optional] 
 **type** | **str** | Path type, can either be &#39;common_prefix&#39; or &#39;object&#39; | 
-**path** | **str** | A source location to a &#39;common_prefix&#39; or to a single object. Must match the lakeFS installation blockstore type. | 
+**path** | **str** | A source location to a &#39;common_prefix&#39; or to a single object. Must match the selected backend&#39;s native address format. | 
 **destination** | **str** | Destination for the imported objects on the branch. Must be a relative path to the branch. If the type is an &#39;object&#39;, the destination is the exact object name under the branch. If the type is a &#39;common_prefix&#39;, the destination is the prefix under the branch.  | 
 
 ## Example

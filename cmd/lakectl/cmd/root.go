@@ -27,6 +27,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/treeverse/lakefs/pkg/api/apigen"
 	"github.com/treeverse/lakefs/pkg/api/apiutil"
+	"github.com/treeverse/lakefs/pkg/api/helpers"
 	"github.com/treeverse/lakefs/pkg/authentication/externalidp/awsiam"
 	"github.com/treeverse/lakefs/pkg/authentication/internalidp"
 	lakefsconfig "github.com/treeverse/lakefs/pkg/config"
@@ -217,6 +218,10 @@ func withStorageID(cmd *cobra.Command) {
 	}
 }
 
+func withSourceStorageID(cmd *cobra.Command) {
+	cmd.Flags().String(storageIDFlagName, "", "Configured source backend; defaults to the repository backend")
+}
+
 func withParallelismFlag(cmd *cobra.Command) {
 	cmd.Flags().IntP(parallelismFlagName, "p", defaultParallelism,
 		"Max concurrent operations to perform")
@@ -239,6 +244,10 @@ func withSyncFlags(cmd *cobra.Command) {
 }
 
 func getStorageConfigOrDie(ctx context.Context, client *apigen.ClientWithResponses, repositoryID string) *apigen.StorageConfig {
+	return getSelectedStorageConfigOrDie(ctx, client, repositoryID, "")
+}
+
+func getSelectedStorageConfigOrDie(ctx context.Context, client *apigen.ClientWithResponses, repositoryID, storageID string) *apigen.StorageConfig {
 	confResp, err := client.GetConfigWithResponse(ctx)
 	DieOnErrorOrUnexpectedStatusCode(confResp, err, http.StatusOK)
 	if confResp.JSON200 == nil {
@@ -246,6 +255,16 @@ func getStorageConfigOrDie(ctx context.Context, client *apigen.ClientWithRespons
 	}
 
 	storageConfigList := confResp.JSON200.StorageConfigList
+	if storageID != "" {
+		if storageConfigList != nil {
+			for _, storageConfig := range *storageConfigList {
+				if swag.StringValue(storageConfig.BlockstoreId) == storageID {
+					return &storageConfig
+				}
+			}
+		}
+		Die("Storage config not found for source "+storageID, 1)
+	}
 	if storageConfigList != nil {
 		switch len(*storageConfigList) {
 		case 0:
@@ -306,6 +325,25 @@ func getPresignMode(cmd *cobra.Command, client *apigen.ClientWithResponses, repo
 	return presignMode
 }
 
+func getObjectPresignMode(cmd *cobra.Command, client *apigen.ClientWithResponses, pathURI *uri.URI) bool {
+	if cmd.Flags().Changed(presignFlagName) {
+		return Must(cmd.Flags().GetBool(presignFlagName))
+	}
+	response, err := client.StatObjectWithResponse(cmd.Context(), pathURI.Repository, pathURI.Ref, &apigen.StatObjectParams{
+		Path:    apiutil.Value(pathURI.Path),
+		Presign: swag.Bool(false),
+	})
+	DieOnErrorOrUnexpectedStatusCode(response, err, http.StatusOK)
+	if response.JSON200 == nil {
+		Die("Bad response from server", 1)
+	}
+	storageID := swag.StringValue(response.JSON200.StorageId)
+	if storageID == "" {
+		return getServerPreSignMode(cmd.Context(), client, pathURI.Repository).Enabled
+	}
+	return Must(helpers.ObjectSupportsPresign(cmd.Context(), client, storageID))
+}
+
 func getNoProgressMode(cmd *cobra.Command) bool {
 	// Disable progress bar if stdout is not tty
 	if !term.IsTerminal(int(os.Stdout.Fd())) {
@@ -325,7 +363,12 @@ func getSyncFlags(cmd *cobra.Command, client *apigen.ClientWithResponses, reposi
 	}
 
 	presignMode := getPresignMode(cmd, client, repositoryID)
+	var readPresign *bool
+	if cmd.Flags().Changed(presignFlagName) {
+		readPresign = swag.Bool(Must(cmd.Flags().GetBool(presignFlagName)))
+	}
 	return local.SyncFlags{
+		ReadPresign:      readPresign,
 		Parallelism:      parallelism,
 		Presign:          presignMode.Enabled,
 		PresignMultipart: presignMode.Multipart,

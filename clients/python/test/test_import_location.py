@@ -37,6 +37,7 @@ class TestImportLocation(unittest.TestCase):
         model = ImportLocation()  # noqa: E501
         if include_optional:
             return ImportLocation(
+                storage_id = '',
                 type = 'common_prefix',
                 path = 's3://my-bucket/production/collections/',
                 destination = 'collections/'

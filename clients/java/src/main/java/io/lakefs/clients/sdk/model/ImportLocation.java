@@ -51,6 +51,10 @@ import io.lakefs.clients.sdk.JSON;
  */
 @javax.annotation.Generated(value = "org.openapitools.codegen.languages.JavaClientCodegen")
 public class ImportLocation {
+  public static final String SERIALIZED_NAME_STORAGE_ID = "storage_id";
+  @SerializedName(SERIALIZED_NAME_STORAGE_ID)
+  private String storageId;
+
   /**
    * Path type, can either be &#39;common_prefix&#39; or &#39;object&#39;
    */
@@ -113,6 +117,27 @@ public class ImportLocation {
   public ImportLocation() {
   }
 
+  public ImportLocation storageId(String storageId) {
+    
+    this.storageId = storageId;
+    return this;
+  }
+
+   /**
+   * Configured backend containing this source. Omitted or empty uses the repository backend.
+   * @return storageId
+  **/
+  @javax.annotation.Nullable
+  public String getStorageId() {
+    return storageId;
+  }
+
+
+  public void setStorageId(String storageId) {
+    this.storageId = storageId;
+  }
+
+
   public ImportLocation type(TypeEnum type) {
     
     this.type = type;
@@ -141,7 +166,7 @@ public class ImportLocation {
   }
 
    /**
-   * A source location to a &#39;common_prefix&#39; or to a single object. Must match the lakeFS installation blockstore type.
+   * A source location to a &#39;common_prefix&#39; or to a single object. Must match the selected backend&#39;s native address format.
    * @return path
   **/
   @javax.annotation.Nonnull
@@ -230,7 +255,8 @@ public class ImportLocation {
       return false;
     }
     ImportLocation importLocation = (ImportLocation) o;
-    return Objects.equals(this.type, importLocation.type) &&
+    return Objects.equals(this.storageId, importLocation.storageId) &&
+        Objects.equals(this.type, importLocation.type) &&
         Objects.equals(this.path, importLocation.path) &&
         Objects.equals(this.destination, importLocation.destination)&&
         Objects.equals(this.additionalProperties, importLocation.additionalProperties);
@@ -238,13 +264,14 @@ public class ImportLocation {
 
   @Override
   public int hashCode() {
-    return Objects.hash(type, path, destination, additionalProperties);
+    return Objects.hash(storageId, type, path, destination, additionalProperties);
   }
 
   @Override
   public String toString() {
     StringBuilder sb = new StringBuilder();
     sb.append("class ImportLocation {\n");
+    sb.append("    storageId: ").append(toIndentedString(storageId)).append("\n");
     sb.append("    type: ").append(toIndentedString(type)).append("\n");
     sb.append("    path: ").append(toIndentedString(path)).append("\n");
     sb.append("    destination: ").append(toIndentedString(destination)).append("\n");
@@ -271,6 +298,7 @@ public class ImportLocation {
   static {
     // a set of all properties/fields (JSON key names)
     openapiFields = new HashSet<String>();
+    openapiFields.add("storage_id");
     openapiFields.add("type");
     openapiFields.add("path");
     openapiFields.add("destination");
@@ -302,6 +330,9 @@ public class ImportLocation {
         }
       }
         JsonObject jsonObj = jsonElement.getAsJsonObject();
+      if ((jsonObj.get("storage_id") != null && !jsonObj.get("storage_id").isJsonNull()) && !jsonObj.get("storage_id").isJsonPrimitive()) {
+        throw new IllegalArgumentException(String.format("Expected the field `storage_id` to be a primitive type in the JSON string but got `%s`", jsonObj.get("storage_id").toString()));
+      }
       if (!jsonObj.get("type").isJsonPrimitive()) {
         throw new IllegalArgumentException(String.format("Expected the field `type` to be a primitive type in the JSON string but got `%s`", jsonObj.get("type").toString()));
       }

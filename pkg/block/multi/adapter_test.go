@@ -501,3 +501,55 @@ func objectPointer(storageID, identifier string) block.ObjectPointer {
 func stringPtr(v string) *string {
 	return &v
 }
+
+func TestLegacyAdapterValidatesSavedStorageIDs(t *testing.T) {
+	for _, method := range objectMethods(t) {
+		t.Run(method.name, func(t *testing.T) {
+			concrete := newRecordingAdapter("us-east-1", true, map[string]string{"ops": "1"})
+			adapter, err := multi.BuildMultiStorageAdapter(&config.Blockstore{}, map[string]block.Adapter{config.SingleBlockstoreID: concrete})
+			require.NoError(t, err)
+			require.NoError(t, method.call(t.Context(), adapter, objectPointer("", "key")))
+			require.Len(t, concrete.objectCalls[method.name], 1)
+			err = method.call(t.Context(), adapter, objectPointer("unavailable-source", "key"))
+			require.ErrorIs(t, err, config.ErrNoStorageConfig)
+			require.Len(t, concrete.objectCalls[method.name], 1, "unknown bindings must fail before reaching native credentials")
+			require.Equal(t, concrete.BlockstoreType(), adapter.BlockstoreType())
+			require.Equal(t, concrete.RuntimeStats(), adapter.RuntimeStats())
+		})
+	}
+}
+
+func TestLegacyAdapterRejectsUnavailableCopyBindings(t *testing.T) {
+	methods := []struct {
+		name string
+		copy func(context.Context, block.Adapter, block.ObjectPointer, block.ObjectPointer) error
+	}{
+		{"copy", func(ctx context.Context, adapter block.Adapter, source, destination block.ObjectPointer) error {
+			return adapter.Copy(ctx, source, destination)
+		}},
+		{"multipart", func(ctx context.Context, adapter block.Adapter, source, destination block.ObjectPointer) error {
+			_, err := adapter.UploadCopyPart(ctx, source, destination, "upload", 1)
+			return err
+		}},
+		{"multipart range", func(ctx context.Context, adapter block.Adapter, source, destination block.ObjectPointer) error {
+			_, err := adapter.UploadCopyPartRange(ctx, source, destination, "upload", 1, 0, 1)
+			return err
+		}},
+	}
+	for _, method := range methods {
+		t.Run(method.name, func(t *testing.T) {
+			concrete := newRecordingAdapter("us-east-1", true, nil)
+			adapter, err := multi.BuildMultiStorageAdapter(&config.Blockstore{}, map[string]block.Adapter{"": concrete})
+			require.NoError(t, err)
+			home := objectPointer("", "destination")
+			missing := objectPointer("unavailable-source", "source")
+			for _, pair := range [][2]block.ObjectPointer{{missing, home}, {home, missing}} {
+				require.ErrorIs(t, method.copy(t.Context(), adapter, pair[0], pair[1]), config.ErrNoStorageConfig)
+			}
+			require.Empty(t, concrete.copyObjects)
+			require.Empty(t, concrete.uploadCopies)
+			require.Empty(t, concrete.rangeCopies)
+			require.NoError(t, method.copy(t.Context(), adapter, home, home))
+		})
+	}
+}

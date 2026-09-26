@@ -89,31 +89,29 @@ func (controller *GetObject) Handle(w http.ResponseWriter, req *http.Request, o 
 	}
 
 	// TODO: the rest of https://docs.aws.amazon.com/en_pv/AmazonS3/latest/API/API_GetObject.html
-	// range query
 	var data io.ReadCloser
 	var rng httputil.Range
-	// range query
+	var rangeErr error
 	rangeSpec := req.Header.Get("Range")
-	if len(rangeSpec) > 0 {
-		rng, err = httputil.ParseRange(rangeSpec, entry.Size)
-		if err != nil {
-			o.Log(req).WithError(err).WithField("range", rangeSpec).Debug("invalid range spec")
-			if errors.Is(err, httputil.ErrUnsatisfiableRange) {
-				_ = o.EncodeError(w, req, err, gatewayerrors.Codes.ToAPIErr(gatewayerrors.ErrInvalidRange))
+	if rangeSpec != "" {
+		rng, rangeErr = httputil.ParseRange(rangeSpec, entry.Size)
+		if rangeErr != nil {
+			o.Log(req).WithError(rangeErr).WithField("range", rangeSpec).Debug("invalid range spec")
+			if errors.Is(rangeErr, httputil.ErrUnsatisfiableRange) {
+				_ = o.EncodeError(w, req, rangeErr, gatewayerrors.Codes.ToAPIErr(gatewayerrors.ErrInvalidRange))
 				return
 			}
 		}
-		// by here, we have a range we can use.
 	}
 
 	statusCode := http.StatusOK
 	contentLength := entry.Size
 	contentRange := ""
-	objectPointer := block.ObjectPointer{
-		StorageID:        o.Repository.StorageID,
-		StorageNamespace: o.Repository.StorageNamespace,
-		IdentifierType:   entry.AddressType.ToIdentifierType(),
-		Identifier:       entry.PhysicalAddress,
+	objectPointer, err := block.NewObjectPointer(entry.StorageID, o.Repository.StorageID,
+		o.Repository.StorageNamespace, entry.PhysicalAddress, entry.AddressType.ToIdentifierType())
+	if err != nil {
+		_ = o.EncodeError(w, req, err, gatewayerrors.Codes.ToAPIErr(gatewayerrors.ErrInternalError))
+		return
 	}
 
 	if redirect {
@@ -129,7 +127,7 @@ func (controller *GetObject) Handle(w http.ResponseWriter, req *http.Request, o 
 		return
 	}
 
-	if rangeSpec == "" || err != nil {
+	if rangeSpec == "" || rangeErr != nil {
 		// assemble a response body (range-less query)
 		data, err = o.BlockStore.Get(ctx, objectPointer)
 	} else {

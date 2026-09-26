@@ -5252,7 +5252,6 @@ class AuthApi:
 
         _response_types_map = {
             '302': None,
-            '401': None,
         }
 
         return self.api_client.call_api(

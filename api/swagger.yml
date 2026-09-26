@@ -354,6 +354,9 @@ components:
         - path_type
         - mtime
       properties:
+        storage_id:
+          type: string
+          description: Effective configured backend for this object. Omitted for common-prefix entries and legacy single-store configurations.
         path:
           type: string
         path_type:
@@ -444,6 +447,9 @@ components:
         - checksum
         - size_bytes
       properties:
+        storage_id:
+          type: string
+          description: Configured backend containing the source object. Omitted or empty uses the repository backend.
         physical_address:
           type: string
         checksum:
@@ -1526,6 +1532,9 @@ components:
       type: object
       description: location for placing an object when staging it
       properties:
+        storage_id:
+          type: string
+          description: Configured backend containing the object. Staging allocation returns the repository backend; omitted or empty on link uses the repository backend.
         physical_address:
           type: string
         presigned_url:
@@ -1681,13 +1690,16 @@ components:
         - path
         - destination
       properties:
+        storage_id:
+          type: string
+          description: Configured backend containing this source. Omitted or empty uses the repository backend.
         type:
           type: string
           enum: [common_prefix, object]
           description: Path type, can either be 'common_prefix' or 'object'
         path:
           type: string
-          description: A source location to a 'common_prefix' or to a single object. Must match the lakeFS installation blockstore type.
+          description: A source location to a 'common_prefix' or to a single object. Must match the selected backend's native address format.
           example: s3://my-bucket/production/collections/
         destination:
           type: string

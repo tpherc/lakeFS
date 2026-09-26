@@ -61,11 +61,11 @@ import {
 } from '../services/importData';
 import { Box } from '@mui/material';
 import { RepoError } from './error';
-import { getContentType, getFileExtension, FileContents } from './objectViewer';
+import { getFileExtension, FileContents } from './objectViewer';
 import { ProgressBar } from 'react-bootstrap';
 import { useSearchParams } from 'react-router-dom';
 import { useConfigContext } from '../../../lib/hooks/configProvider';
-import { getRepoStorageConfig } from './utils';
+import { getRepoStorageConfig, getObjectStorageConfig } from './utils';
 import { useDropzone } from 'react-dropzone';
 import pMap from 'p-map';
 import { formatAlertText } from '../../../lib/components/repository/errors';
@@ -212,6 +212,11 @@ export const useInterval = (callback, delay) => {
 };
 
 const ImportModal = ({ config, repoId, referenceId, referenceType, path = '', onDone, onHide, show = false }) => {
+    const { config: serverConfig } = useConfigContext();
+    const [sourceStorageID, setSourceStorageID] = useState('');
+    const sourceConfig = sourceStorageID
+        ? serverConfig?.storages?.find((storage) => storage.blockstore_id === sourceStorageID)
+        : config;
     const [importPhase, setImportPhase] = useState(ImportPhase.NotStarted);
     const [numberOfImportedObjects, setNumberOfImportedObjects] = useState(0);
     const [isImportEnabled, setIsImportEnabled] = useState(false);
@@ -257,6 +262,7 @@ const ImportModal = ({ config, repoId, referenceId, referenceType, path = '', on
         setNumberOfImportedObjects(0);
         setMetadataFields([]);
         setImportID('');
+        setSourceStorageID('');
     };
 
     const hide = () => {
@@ -283,6 +289,7 @@ const ImportModal = ({ config, repoId, referenceId, referenceType, path = '', on
                 repoId,
                 branchId,
                 metadata,
+                sourceStorageID || undefined,
             );
         } catch (error) {
             setImportPhase(ImportPhase.Failed);
@@ -296,12 +303,15 @@ const ImportModal = ({ config, repoId, referenceId, referenceType, path = '', on
         <>
             <Modal show={show} onHide={hide} size="lg">
                 <Modal.Header closeButton>
-                    <Modal.Title>Import data from {config.blockstore_type}</Modal.Title>
+                    <Modal.Title>Import data</Modal.Title>
                 </Modal.Header>
                 <Modal.Body>
                     {
                         <ImportForm
-                            config={config}
+                            config={sourceConfig}
+                            storageConfigs={serverConfig?.storages}
+                            sourceStorageID={sourceStorageID}
+                            onSourceStorageChange={setSourceStorageID}
                             repo={repoId}
                             branch={branchId}
                             pathStyle={pathStyle}
@@ -944,7 +954,7 @@ export const EmptyChangesState = ({ repo, reference, toggleShowChanges }) => {
     );
 };
 
-const TreeContainer = ({
+export const TreeContainer = ({
     config,
     repo,
     reference,
@@ -993,8 +1003,8 @@ const TreeContainer = ({
                 refs.changes(repo.id, reference.id, lastSeenPath, path, delimiter),
             );
         } else {
-            // Show all objects
-            return objects.list(repo.id, reference.id, path, after, config.pre_sign_support_ui);
+            // Listing metadata must work for sources that cannot sign URLs.
+            return objects.list(repo.id, reference.id, path, after);
         }
         // TODO: Review and remove this eslint-disable once dependencies are validated
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1153,7 +1163,8 @@ const TreeContainer = ({
     );
 };
 
-const ReadmeContainer = ({ config, repo, reference, path = '', refreshDep = '' }) => {
+const ReadmeContainer = ({ repo, reference, path = '', refreshDep = '' }) => {
+    const { config } = useConfigContext();
     let readmePath = '';
 
     if (path) {
@@ -1162,10 +1173,10 @@ const ReadmeContainer = ({ config, repo, reference, path = '', refreshDep = '' }
         readmePath = README_FILE_NAME;
     }
     const { response, error, loading } = useAPI(
-        () => objects.head(repo.id, reference.id, readmePath),
-        // TODO: Review and remove this eslint-disable once dependencies are validated
+        () => objects.getStat(repo.id, reference.id, readmePath),
+        // Refresh metadata after local mutations as well as navigation.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-        [path, refreshDep],
+        [repo.id, reference.id, readmePath, refreshDep],
     );
 
     if (loading || error) {
@@ -1173,7 +1184,7 @@ const ReadmeContainer = ({ config, repo, reference, path = '', refreshDep = '' }
     }
 
     const fileExtension = getFileExtension(readmePath);
-    const contentType = getContentType(response?.headers);
+    const storageConfig = getObjectStorageConfig(config?.storages, repo, response);
 
     return (
         <FileContents
@@ -1181,11 +1192,12 @@ const ReadmeContainer = ({ config, repo, reference, path = '', refreshDep = '' }
             reference={reference}
             path={readmePath}
             fileExtension={fileExtension}
-            contentType={contentType}
+            contentType={response?.content_type}
+            sizeBytes={response?.size_bytes}
             error={error}
             loading={loading}
             showFullNavigator={false}
-            presign={config.pre_sign_support_ui}
+            presign={storageConfig?.pre_sign_support_ui ?? false}
         />
     );
 };
@@ -1258,6 +1270,7 @@ const DataViewToggle = ({ activeView, onChangeView }) => {
 };
 
 const ObjectsBrowser = ({ storageConfig }) => {
+    const { config: serverConfig } = useConfigContext();
     const router = useRouter();
     const { path, after, importDialog, upload, showChanges } = router.query;
     const [searchParams, setSearchParams] = useSearchParams();
@@ -1465,7 +1478,7 @@ const ObjectsBrowser = ({ storageConfig }) => {
                             <Button
                                 size="sm"
                                 variant="outline-secondary"
-                                disabled={!storageConfig.import_support}
+                                disabled={!serverConfig?.storages?.some((storage) => storage.import_support)}
                                 onClick={() => setShowImport(true)}
                             >
                                 <BsCloudArrowUp /> Import

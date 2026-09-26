@@ -16,6 +16,7 @@ import (
 	blockfactory "github.com/treeverse/lakefs/pkg/block/factory"
 	"github.com/treeverse/lakefs/pkg/block/gs"
 	"github.com/treeverse/lakefs/pkg/block/local"
+	"github.com/treeverse/lakefs/pkg/block/multi"
 	"github.com/treeverse/lakefs/pkg/config"
 	"github.com/treeverse/lakefs/pkg/kv/kvparams"
 	"github.com/treeverse/lakefs/pkg/logging"
@@ -132,7 +133,11 @@ func TestConfig_BuildBlockAdapter(t *testing.T) {
 		testutil.Must(t, err)
 		adapter, err := blockfactory.BuildBlockAdapterWithMetrics(ctx, nil, c)
 		testutil.Must(t, err)
-		metricsAdapter, ok := adapter.(*block.MetricsAdapter)
+		router, ok := adapter.(*multi.Adapter)
+		require.True(t, ok, "configured adapters must validate object storage IDs")
+		concrete, err := router.ResolveAdapter(config.SingleBlockstoreID)
+		require.NoError(t, err)
+		metricsAdapter, ok := concrete.(*block.MetricsAdapter)
 		if !ok {
 			t.Fatalf("got a %T when expecting a MetricsAdapter", adapter)
 		}
@@ -158,7 +163,11 @@ func TestConfig_BuildBlockAdapter(t *testing.T) {
 		adapter, err := blockfactory.BuildBlockAdapterWithMetrics(ctx, nil, c)
 		testutil.Must(t, err)
 
-		metricsAdapter, ok := adapter.(*block.MetricsAdapter)
+		router, ok := adapter.(*multi.Adapter)
+		require.True(t, ok, "configured adapters must validate object storage IDs")
+		concrete, err := router.ResolveAdapter(config.SingleBlockstoreID)
+		require.NoError(t, err)
+		metricsAdapter, ok := concrete.(*block.MetricsAdapter)
 		if !ok {
 			t.Fatalf("expected a metrics block adapter, got something else instead")
 		}

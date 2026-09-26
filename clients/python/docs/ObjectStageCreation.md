@@ -5,6 +5,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**storage_id** | **str** | Configured backend containing the source object. Omitted or empty uses the repository backend. | [optional] 
 **physical_address** | **str** |  | 
 **checksum** | **str** |  | 
 **size_bytes** | **int** |  | 

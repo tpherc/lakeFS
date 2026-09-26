@@ -27,16 +27,11 @@ options.components = {
  * @param {string} text
  * @returns {JSX.Element}
  */
-export function useMarkdownProcessor(
-    text: string,
-    repoId: string,
-    refId: string,
-    path: string,
-    presign: boolean,
-): JSX.Element {
+export function useMarkdownProcessor(text: string, repoId: string, refId: string, path: string): JSX.Element {
     const [content, setContent] = useState(createElement(Fragment));
 
     useEffect(() => {
+        let active = true;
         (async () => {
             const file = await unified()
                 .use(remarkParse)
@@ -44,7 +39,6 @@ export function useMarkdownProcessor(
                     repo: repoId,
                     ref: refId,
                     path,
-                    presign,
                 })
                 .use(remarkGfm)
                 .use(remarkHtml)
@@ -55,11 +49,12 @@ export function useMarkdownProcessor(
                 .use(rehypeWrap, { wrapper: 'div.object-viewer-markdown' })
                 .process(text);
 
-            setContent(file.result);
+            if (active) setContent(file.result);
         })();
-        // TODO: Review and remove this eslint-disable once dependencies are validated
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [text]);
+        return () => {
+            active = false;
+        };
+    }, [text, repoId, refId, path]);
 
     return content;
 }

@@ -68,28 +68,33 @@ class ImportManager(_BaseLakeFSObject):
 
         self.sources.append(import_location)
 
-    def prefix(self, object_store_uri: str, destination: str) -> ImportManager:
+    def prefix(self, object_store_uri: str, destination: str, storage_id: Optional[str] = None) -> ImportManager:
         """
         Creates a new import source of type "common_prefix" and adds it to the list of sources
 
         :param object_store_uri: The URI from which to import the objects
         :param destination: The destination prefix relative to the branch
+        :param storage_id: Optional configured source backend; defaults to the repository backend
         :return: The ImportManager instance (self) after update, to allow operations chaining
         """
         self._append_source(lakefs_sdk.ImportLocation(type=_COMMON_PREFIX,
                                                       path=object_store_uri,
-                                                      destination=destination))
+                                                      destination=destination, storage_id=storage_id))
         return self
 
-    def object(self, object_store_uri: str, destination: str) -> ImportManager:
+    def object(self, object_store_uri: str, destination: str, storage_id: Optional[str] = None) -> ImportManager:
         """
         Creates a new import source of type "object" and adds it to the list of sources
 
         :param object_store_uri: The URI from which to import the object
         :param destination: The destination path for the object relative to the branch
+        :param storage_id: Optional configured source backend; defaults to the repository backend
         :return: The ImportManager instance (self) after update, to allow operations chaining
         """
-        self._append_source(lakefs_sdk.ImportLocation(type=_OBJECT, path=object_store_uri, destination=destination))
+        self._append_source(lakefs_sdk.ImportLocation(type=_OBJECT,
+                                                      path=object_store_uri,
+                                                      destination=destination,
+                                                      storage_id=storage_id))
         return self
 
     def start(self) -> str:

@@ -14,7 +14,7 @@ import { RefTypeBranch } from '../../../constants';
 import { RefContextProvider, useRefs } from '../../../lib/hooks/repo';
 import { useConfigContext } from '../../../lib/hooks/configProvider';
 import { linkToPath } from '../../../lib/api';
-import { getRepoStorageConfig } from './utils';
+import { getObjectStorageConfig } from './utils';
 
 import '../../../styles/quickstart.css';
 
@@ -59,7 +59,6 @@ export const getContentType = (headers: Headers): string | undefined => {
 const FileObjectsViewerPage = () => {
     const { repo, loading: repoLoading, error: repoError } = useRefs();
     const { config, error: configsError, loading: configLoading } = useConfigContext();
-    const { storageConfig, error: storageConfigError } = getRepoStorageConfig(config?.storages, repo);
 
     const { repoId } = useParams<ObjectViewerPathParams>();
     const queryString = useQuery<ObjectViewerQueryString>();
@@ -70,10 +69,10 @@ const FileObjectsViewerPage = () => {
         error: apiError,
         loading: apiLoading,
     } = useAPI(() => {
-        return objects.head(repoId, refId, path);
+        return objects.getStat(repoId, refId, path);
     }, [repoId, refId, path]);
     const loading = apiLoading || repoLoading || configLoading;
-    const error = loading ? null : apiError || repoError || configsError || storageConfigError;
+    const error = loading ? null : apiError || repoError || configsError;
 
     let content;
     if (loading) {
@@ -82,13 +81,7 @@ const FileObjectsViewerPage = () => {
         content = <AlertError error={error} />;
     } else {
         const fileExtension = getFileExtension(path);
-        // We'll need to convert the API service to get rid of this any
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const contentType = getContentType((response as any)?.headers);
-        const sizeBytes = parseInt(
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (response as any)?.headers.get('Content-Length'),
-        );
+        const storageConfig = getObjectStorageConfig(config?.storages, repo, response);
         content = (
             <FileContents
                 repoId={repoId || ''}
@@ -98,11 +91,11 @@ const FileObjectsViewerPage = () => {
                 reference={{ id: refId, type: RefTypeBranch }}
                 path={path}
                 fileExtension={fileExtension}
-                contentType={contentType}
-                sizeBytes={sizeBytes}
+                contentType={response?.content_type}
+                sizeBytes={response?.size_bytes}
                 error={error}
                 loading={loading}
-                presign={storageConfig.pre_sign_support_ui}
+                presign={storageConfig?.pre_sign_support_ui ?? false}
             />
         );
     }

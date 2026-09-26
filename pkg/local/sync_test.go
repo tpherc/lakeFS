@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-openapi/swag"
 	"github.com/rs/xid"
 	"github.com/stretchr/testify/require"
 	"github.com/treeverse/lakefs/pkg/api/apigen"
@@ -625,4 +626,35 @@ func getTestClient(t *testing.T, endpoint string) *apigen.ClientWithResponses {
 	require.NoError(t, err)
 
 	return client
+}
+
+func TestSyncManagerSourceWithoutPresignUsesProxy(t *testing.T) {
+	content := "source bytes"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/config":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"storage_config_list":[{"blockstore_id":"home","pre_sign_support":true},{"blockstore_id":"source","pre_sign_support":false}],"version_config":{}}`))
+		case "/api/v1/repositories/repo/refs/main/objects/stat":
+			require.Equal(t, "false", r.URL.Query().Get("presign"))
+			w.Header().Set("Content-Type", "application/json")
+			require.NoError(t, json.NewEncoder(w).Encode(apigen.ObjectStats{StorageId: swag.String("source"), PhysicalAddress: "gs://bucket/object", SizeBytes: swag.Int64(int64(len(content))), Mtime: time.Now().Unix()}))
+		case "/api/v1/repositories/repo/refs/main/objects":
+			require.NotEqual(t, "true", r.URL.Query().Get("presign"))
+			_, _ = w.Write([]byte(content))
+		default:
+			t.Errorf("unexpected request %s", r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	manager := local.NewSyncManager(t.Context(), getTestClient(t, server.URL), server.Client(), local.Config{SyncFlags: local.SyncFlags{Parallelism: 1, Presign: true, PresignMultipart: true, NoProgress: true}})
+	changes := make(chan *local.Change, 1)
+	changes <- &local.Change{Source: local.ChangeSourceRemote, Path: "object", Type: local.ChangeTypeAdded}
+	close(changes)
+	destination := t.TempDir()
+	require.NoError(t, manager.Sync(destination, &uri.URI{Repository: "repo", Ref: "main"}, changes))
+	data, err := os.ReadFile(filepath.Join(destination, "object"))
+	require.NoError(t, err)
+	require.Equal(t, content, string(data))
 }

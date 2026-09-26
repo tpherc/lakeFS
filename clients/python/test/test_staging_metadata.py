@@ -38,6 +38,7 @@ class TestStagingMetadata(unittest.TestCase):
         if include_optional:
             return StagingMetadata(
                 staging = lakefs_sdk.models.staging_location.StagingLocation(
+                    storage_id = '', 
                     physical_address = '', 
                     presigned_url = '', 
                     presigned_url_expiry = 56, ),
@@ -53,6 +54,7 @@ class TestStagingMetadata(unittest.TestCase):
         else:
             return StagingMetadata(
                 staging = lakefs_sdk.models.staging_location.StagingLocation(
+                    storage_id = '', 
                     physical_address = '', 
                     presigned_url = '', 
                     presigned_url_expiry = 56, ),
