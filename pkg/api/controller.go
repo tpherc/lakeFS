@@ -3470,15 +3470,24 @@ func commitResponse(w http.ResponseWriter, r *http.Request, newCommit *catalog.C
 }
 
 func (c *Controller) DiffBranch(w http.ResponseWriter, r *http.Request, repository, branch string, params apigen.DiffBranchParams) {
-	if !c.authorize(w, r, permissions.Node{
+	ctx := r.Context()
+	user, err := auth.GetUser(ctx)
+	if err != nil {
+		writeError(w, r, http.StatusUnauthorized, ErrAuthenticatingRequest)
+		return
+	}
+	prepared, err := auth.PrepareAuthorization(ctx, c.Auth, user.Username)
+	if c.handleAPIError(ctx, w, r, err) {
+		return
+	}
+	if !c.authorizeWith(w, r, prepared, permissions.Node{
 		Permission: permissions.Permission{
 			Action:   permissions.ListObjectsAction,
 			Resource: permissions.RepoArn(repository),
 		},
-	}) {
+	}, writeError) {
 		return
 	}
-	ctx := r.Context()
 	c.LogAction(ctx, "diff_workspace", r, repository, branch, "")
 
 	diff, hasMore, err := c.Catalog.DiffUncommitted(
@@ -3489,6 +3498,7 @@ func (c *Controller) DiffBranch(w http.ResponseWriter, r *http.Request, reposito
 		paginationDelimiter(params.Delimiter),
 		paginationAmount(params.Amount),
 		paginationAfter(params.After),
+		catalog.WithDiffPermissionFilter(ctx, prepared, user.Username, repository, httputil.ExtractClientIP(r.Header, r.RemoteAddr)),
 	)
 	if c.handleAPIError(ctx, w, r, err) {
 		return
@@ -4676,15 +4686,24 @@ func (c *Controller) CreateSymlinkFile(w http.ResponseWriter, r *http.Request, r
 }
 
 func (c *Controller) DiffRefs(w http.ResponseWriter, r *http.Request, repository, leftRef, rightRef string, params apigen.DiffRefsParams) {
-	if !c.authorize(w, r, permissions.Node{
+	ctx := r.Context()
+	user, err := auth.GetUser(ctx)
+	if err != nil {
+		writeError(w, r, http.StatusUnauthorized, ErrAuthenticatingRequest)
+		return
+	}
+	prepared, err := auth.PrepareAuthorization(ctx, c.Auth, user.Username)
+	if c.handleAPIError(ctx, w, r, err) {
+		return
+	}
+	if !c.authorizeWith(w, r, prepared, permissions.Node{
 		Permission: permissions.Permission{
 			Action:   permissions.ListObjectsAction,
 			Resource: permissions.RepoArn(repository),
 		},
-	}) {
+	}, writeError) {
 		return
 	}
-	ctx := r.Context()
 	c.LogAction(ctx, "diff_refs", r, repository, rightRef, leftRef)
 	diffFunc := c.Catalog.Compare // default diff type is three-dot
 	if params.Type != nil && *params.Type == "two_dot" {
@@ -4697,7 +4716,7 @@ func (c *Controller) DiffRefs(w http.ResponseWriter, r *http.Request, repository
 		Prefix:           paginationPrefix(params.Prefix),
 		Delimiter:        paginationDelimiter(params.Delimiter),
 		AdditionalFields: nil,
-	})
+	}, catalog.WithDiffPermissionFilter(ctx, prepared, user.Username, repository, httputil.ExtractClientIP(r.Header, r.RemoteAddr)))
 	if c.handleAPIError(ctx, w, r, err) {
 		return
 	}

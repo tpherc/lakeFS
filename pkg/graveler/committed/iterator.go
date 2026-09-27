@@ -42,7 +42,14 @@ func (rvi *iterator) loadIt() bool {
 }
 
 func (rvi *iterator) NextRange() bool {
+	if rvi.err != nil {
+		return false
+	}
 	if rvi.it != nil {
+		if err := rvi.it.Err(); err != nil {
+			rvi.err = err
+			return false
+		}
 		rvi.it.Close()
 	}
 	rvi.it = nil
@@ -51,6 +58,7 @@ func (rvi *iterator) NextRange() bool {
 	var rngRecord *Record
 	for rngRecord == nil { // Skip this and any consecutive finished ranges.
 		if !rvi.rangesIt.Next() {
+			rvi.err = rvi.rangesIt.Err()
 			return false
 		}
 		rngRecord = rvi.rangesIt.Value()

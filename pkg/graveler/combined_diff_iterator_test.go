@@ -38,9 +38,14 @@ func diffVal(key string, leftID string, rightID string) *graveler.Diff {
 		typ = graveler.DiffTypeRemoved
 		valueId = []byte(leftID)
 	}
+	var leftValue *graveler.Value
+	if leftID != "" {
+		leftValue = &graveler.Value{Identity: []byte(leftID)}
+	}
 	return &graveler.Diff{
-		Type: typ,
-		Key:  graveler.Key(key),
+		LeftValue: leftValue,
+		Type:      typ,
+		Key:       graveler.Key(key),
 		Value: &graveler.Value{
 			Identity: valueId,
 		},

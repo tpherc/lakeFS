@@ -126,6 +126,9 @@ func (c *JoinedDiffIterator) Close() {
 }
 
 func (c *JoinedDiffIterator) SeekGE(id Key) {
+	c.started = false
+	c.iterAHasMore = true
+	c.iterBHasMore = true
 	c.currentIter = nil
 	c.iterA.SeekGE(id)
 	c.iterB.SeekGE(id)

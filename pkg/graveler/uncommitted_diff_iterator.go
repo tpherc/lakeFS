@@ -3,6 +3,7 @@ package graveler
 import (
 	"bytes"
 	"context"
+	"fmt"
 )
 
 type uncommittedDiffIterator struct {
@@ -22,71 +23,68 @@ func NewUncommittedDiffIterator(ctx context.Context, committedList ValueIterator
 	}
 }
 
-// getIdentityFromCommittedIfExists Returns the identity of the value if the value exists in the committed list
-// Returns nil in case the value does not exist
-func (d *uncommittedDiffIterator) getIdentityFromCommittedIfExists(val ValueRecord) ([]byte, error) {
+// committedValue returns the exact historical entry used to classify the change.
+func (d *uncommittedDiffIterator) committedValue(key Key) (*Value, error) {
 	if d.committedList == nil {
 		return nil, nil
 	}
-	d.committedList.SeekGE(val.Key)
+	d.committedList.SeekGE(key)
 	if d.committedList.Next() {
-		if bytes.Equal(d.committedList.Value().Key, val.Key) {
-			return d.committedList.Value().Identity, nil
+		record := d.committedList.Value()
+		if record == nil {
+			return nil, fmt.Errorf("missing committed record: %w", ErrInvalidValue)
+		}
+		if bytes.Equal(record.Key, key) {
+			if record.Value == nil {
+				return nil, fmt.Errorf("missing committed value: %w", ErrInvalidValue)
+			}
+			return record.Value, nil
 		}
 	}
-	if d.committedList.Err() != nil {
-		return nil, d.committedList.Err()
-	}
-	return nil, nil
+	return nil, d.committedList.Err()
 }
 
-// getDiffType returns the diffType between value with committed
-// Returns skip == true in case of no diff
-func (d *uncommittedDiffIterator) getDiffType(val ValueRecord) (diffType DiffType, skip bool, err error) {
-	committedIdentity, err := d.getIdentityFromCommittedIfExists(val)
-	if err != nil {
-		return 0, false, err
+func uncommittedDiffType(value, committed *Value) (DiffType, bool) {
+	switch {
+	case value == nil:
+		return DiffTypeRemoved, committed == nil
+	case committed == nil:
+		return DiffTypeAdded, false
+	default:
+		return DiffTypeChanged, bytes.Equal(committed.Identity, value.Identity)
 	}
-	existsInCommitted := committedIdentity != nil
-	if val.Value == nil {
-		// tombstone
-		if !existsInCommitted {
-			// this might happen in the kv-staging area since it consist of
-			// multiple staging layers.
-			return DiffTypeRemoved, true, nil
-		}
-		return DiffTypeRemoved, false, nil
-	}
-	if !existsInCommitted {
-		return DiffTypeAdded, false, nil
-	}
-	if bytes.Equal(committedIdentity, val.Identity) {
-		return 0, true, nil
-	}
-	return DiffTypeChanged, false, nil
 }
 
 func (d *uncommittedDiffIterator) Next() bool {
 	for {
+		if d.err != nil {
+			return false
+		}
+		if err := d.ctx.Err(); err != nil {
+			d.value = nil
+			d.err = err
+			return false
+		}
 		if !d.uncommittedList.Next() {
+			d.err = d.uncommittedList.Err()
 			d.value = nil
 			return false
 		}
 		val := d.uncommittedList.Value()
-		diffType, skip, err := d.getDiffType(*val)
+		committed, err := d.committedValue(val.Key)
 		if err != nil {
 			d.value = nil
 			d.err = err
 			return false
 		}
+		diffType, skip := uncommittedDiffType(val.Value, committed)
 		if skip {
 			continue
 		}
-		d.value = &Diff{
-			Type:  diffType,
-			Key:   val.Key,
-			Value: val.Value,
-		}
+		d.value = (&Diff{
+			Type: diffType, Key: val.Key, Value: val.Value,
+			LeftValue: committed,
+		}).Copy()
 		return true
 	}
 }

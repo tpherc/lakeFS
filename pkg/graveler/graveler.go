@@ -580,15 +580,28 @@ type Diff struct {
 	Key          Key
 	Value        *Value
 	LeftIdentity []byte // the Identity of the value on the left side of the diff
+	// LeftValue retains the existing destination entry, independently of Value's
+	// legacy deletion representation. BaseValue is populated for conflicts only.
+	LeftValue *Value
+	BaseValue *Value
 }
 
 func (d *Diff) Copy() *Diff {
 	return &Diff{
 		Type:         d.Type,
 		Key:          d.Key.Copy(),
-		Value:        d.Value,
+		Value:        copyDiffValue(d.Value),
+		LeftValue:    copyDiffValue(d.LeftValue),
+		BaseValue:    copyDiffValue(d.BaseValue),
 		LeftIdentity: append([]byte(nil), d.LeftIdentity...),
 	}
+}
+
+func copyDiffValue(value *Value) *Value {
+	if value == nil {
+		return nil
+	}
+	return &Value{Identity: slices.Clone(value.Identity), Data: slices.Clone(value.Data)}
 }
 
 type safeBranchWriteOptions struct {

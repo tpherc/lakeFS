@@ -955,6 +955,7 @@ func TestGraveler_Diff(t *testing.T) {
 							Data:     []byte("committed"),
 						},
 						LeftIdentity: []byte("DECAF"),
+						LeftValue:    &graveler.Value{Identity: []byte("DECAF"), Data: []byte("BAD")},
 					},
 				}),
 			},
@@ -1013,6 +1014,7 @@ func TestGraveler_Diff(t *testing.T) {
 						Data:     []byte("deleted"),
 					},
 					LeftIdentity: []byte("deleted"),
+					LeftValue:    &graveler.Value{Identity: []byte("deleted"), Data: []byte("deleted")},
 				},
 				{
 					Key:  graveler.Key("foo/modified_committed"),
@@ -1022,6 +1024,7 @@ func TestGraveler_Diff(t *testing.T) {
 						Data:     []byte("committed"),
 					},
 					LeftIdentity: []byte("DECAF"),
+					LeftValue:    &graveler.Value{Identity: []byte("DECAF"), Data: []byte("BAD")},
 				},
 				{
 					Key:  graveler.Key("foo/modify"),
@@ -1031,6 +1034,7 @@ func TestGraveler_Diff(t *testing.T) {
 						Data:     []byte("test"),
 					},
 					LeftIdentity: []byte("DECAF"),
+					LeftValue:    &graveler.Value{Identity: []byte("DECAF"), Data: []byte("BAD")},
 				},
 			}),
 		},
@@ -1076,6 +1080,7 @@ func TestGraveler_Diff(t *testing.T) {
 							Data:     []byte("committed"),
 						},
 						LeftIdentity: []byte("DECAF"),
+						LeftValue:    &graveler.Value{Identity: []byte("DECAF"), Data: []byte("BAD")},
 					},
 				}),
 			},
@@ -1134,6 +1139,7 @@ func TestGraveler_Diff(t *testing.T) {
 						Data:     []byte("deleted"),
 					},
 					LeftIdentity: []byte("deleted"),
+					LeftValue:    &graveler.Value{Identity: []byte("deleted"), Data: []byte("deleted")},
 				},
 				{
 					Key:  graveler.Key("foo/modified_committed"),
@@ -1143,6 +1149,7 @@ func TestGraveler_Diff(t *testing.T) {
 						Data:     []byte("committed"),
 					},
 					LeftIdentity: []byte("DECAF"),
+					LeftValue:    &graveler.Value{Identity: []byte("DECAF"), Data: []byte("BAD")},
 				},
 				{
 					Key:  graveler.Key("foo/modify"),
@@ -1152,6 +1159,7 @@ func TestGraveler_Diff(t *testing.T) {
 						Data:     []byte("test"),
 					},
 					LeftIdentity: []byte("DECAF"),
+					LeftValue:    &graveler.Value{Identity: []byte("DECAF"), Data: []byte("BAD")},
 				},
 			}),
 		},
@@ -1253,9 +1261,10 @@ func TestGraveler_DiffUncommitted(t *testing.T) {
 				}, nil, testutil.NewProtectedBranchesManagerFake(),
 			),
 			expectedDiff: testutil.NewDiffIter([]graveler.Diff{{
-				Key:   graveler.Key("foo/one"),
-				Type:  graveler.DiffTypeChanged,
-				Value: &graveler.Value{Identity: []byte("one_changed")},
+				Key:       graveler.Key("foo/one"),
+				Type:      graveler.DiffTypeChanged,
+				Value:     &graveler.Value{Identity: []byte("one_changed")},
+				LeftValue: &graveler.Value{Identity: []byte("one")},
 			}}),
 		},
 		{
@@ -1265,8 +1274,9 @@ func TestGraveler_DiffUncommitted(t *testing.T) {
 				&testutil.RefsFake{Branch: &graveler.Branch{CommitID: "c1", StagingToken: "token"}, Commits: map[graveler.CommitID]*graveler.Commit{"c1": {MetaRangeID: "mri1"}}}, nil, testutil.NewProtectedBranchesManagerFake(),
 			),
 			expectedDiff: testutil.NewDiffIter([]graveler.Diff{{
-				Key:  graveler.Key("foo/one"),
-				Type: graveler.DiffTypeRemoved,
+				Key:       graveler.Key("foo/one"),
+				Type:      graveler.DiffTypeRemoved,
+				LeftValue: &graveler.Value{Identity: []byte("not-nil")},
 			}}),
 		},
 		{
@@ -1361,14 +1371,16 @@ func TestGraveler_DiffUncommitted(t *testing.T) {
 					Type: graveler.DiffTypeRemoved,
 				},
 				{
-					Key:   graveler.Key("foo/d"),
-					Type:  graveler.DiffTypeChanged,
-					Value: &graveler.Value{Identity: []byte("staged"), Data: []byte("staged")},
+					Key:       graveler.Key("foo/d"),
+					Type:      graveler.DiffTypeChanged,
+					Value:     &graveler.Value{Identity: []byte("staged"), Data: []byte("staged")},
+					LeftValue: &graveler.Value{Identity: []byte("BAD"), Data: []byte("BAD")},
 				},
 				{
-					Key:   graveler.Key("foo/e"),
-					Type:  graveler.DiffTypeChanged,
-					Value: &graveler.Value{Identity: []byte("staged"), Data: []byte("staged")},
+					Key:       graveler.Key("foo/e"),
+					Type:      graveler.DiffTypeChanged,
+					Value:     &graveler.Value{Identity: []byte("staged"), Data: []byte("staged")},
+					LeftValue: &graveler.Value{Identity: []byte("BAD"), Data: []byte("BAD")},
 				},
 				{
 					Key:   graveler.Key("foo/f"),
@@ -1376,8 +1388,9 @@ func TestGraveler_DiffUncommitted(t *testing.T) {
 					Value: &graveler.Value{Identity: []byte("staged"), Data: []byte("staged")},
 				},
 				{
-					Key:  graveler.Key("foo/g"),
-					Type: graveler.DiffTypeRemoved,
+					Key:       graveler.Key("foo/g"),
+					Type:      graveler.DiffTypeRemoved,
+					LeftValue: &graveler.Value{Identity: []byte("BAD"), Data: []byte("BAD")},
 				},
 			}),
 		},
@@ -1490,15 +1503,17 @@ func TestGravelerDiffUncommitted_Advanced(t *testing.T) {
 			},
 		},
 		{
-			Key:  graveler.Key("not_in_staged_in_sealed"),
-			Type: graveler.DiffTypeChanged,
+			Key:       graveler.Key("not_in_staged_in_sealed"),
+			Type:      graveler.DiffTypeChanged,
+			LeftValue: &graveler.Value{Identity: []byte("BAD")},
 			Value: &graveler.Value{
 				Identity: []byte("stagedB"),
 			},
 		},
 		{
-			Key:  graveler.Key("staged"),
-			Type: graveler.DiffTypeChanged,
+			Key:       graveler.Key("staged"),
+			Type:      graveler.DiffTypeChanged,
+			LeftValue: &graveler.Value{Identity: []byte("BAD")},
 			Value: &graveler.Value{
 				Identity: []byte("stagedA"),
 			},
