@@ -1,4 +1,4 @@
-import React, { createContext, useReducer } from 'react';
+import React, { createContext, useLayoutEffect, useReducer } from 'react';
 
 type AppContextType = {
     settings: AppContext;
@@ -22,7 +22,7 @@ interface Action {
 }
 
 const initialLocalSettings: AppContext = {
-    darkMode: window.localStorage.getItem(localStorageKeys.darkMode) === String(true),
+    darkMode: document.documentElement.getAttribute('data-bs-theme') === 'dark',
 };
 
 const initialAppContext: AppContextType = {
@@ -32,7 +32,6 @@ const initialAppContext: AppContextType = {
 const appContextReducer = (state: AppContextType, action: Action) => {
     switch (action.type) {
         case AppActionType.setDarkMode:
-            window.localStorage.setItem(localStorageKeys.darkMode, String(action.value));
             return { ...state, settings: { ...state.settings, darkMode: action.value } };
         default:
             return state;
@@ -52,6 +51,15 @@ const AppContext = createContext<ContextType>({
 // @ts-expect-error - it doesn't like the "children" prop
 const WithAppContext: React.FC = ({ children }) => {
     const [state, dispatch] = useReducer(appContextReducer, initialAppContext);
+
+    useLayoutEffect(() => {
+        document.documentElement.setAttribute('data-bs-theme', state.settings.darkMode ? 'dark' : 'light');
+        try {
+            window.localStorage.setItem(localStorageKeys.darkMode, String(state.settings.darkMode));
+        } catch {
+            // Theme changes still work for this session when storage is unavailable.
+        }
+    }, [state.settings.darkMode]);
 
     return <AppContext.Provider value={{ state, dispatch }}>{children}</AppContext.Provider>;
 };

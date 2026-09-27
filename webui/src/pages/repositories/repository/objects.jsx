@@ -954,6 +954,35 @@ export const EmptyChangesState = ({ repo, reference, toggleShowChanges }) => {
     );
 };
 
+const ObjectListFrame = ({ loading = false, children }) => {
+    const contentRef = useRef(null);
+    const settledHeight = useRef(0);
+
+    React.useLayoutEffect(() => {
+        if (loading) return;
+        const content = contentRef.current;
+        const measure = () => {
+            settledHeight.current = content.getBoundingClientRect().height;
+        };
+        measure();
+        const observer = new ResizeObserver(measure);
+        observer.observe(content);
+        return () => observer.disconnect();
+    }, [loading]);
+
+    return (
+        <div aria-busy={loading} style={loading ? { minHeight: settledHeight.current || '12rem' } : undefined}>
+            {loading ? (
+                <Loading />
+            ) : (
+                <div ref={contentRef} style={{ display: 'flow-root' }}>
+                    {children}
+                </div>
+            )}
+        </div>
+    );
+};
+
 export const TreeContainer = ({
     config,
     repo,
@@ -1049,7 +1078,7 @@ export const TreeContainer = ({
             });
     };
 
-    if (loading) return <Loading />;
+    if (loading) return <ObjectListFrame loading />;
     if (error) return <AlertError error={error} />;
 
     // If showing changes only, use ChangesTreeContainer
@@ -1059,7 +1088,11 @@ export const TreeContainer = ({
         const changesResults = rawChangesResults.sort((a, b) => compareLexicographically(a.path, b.path));
 
         if (changesResults.length === 0) {
-            return <EmptyChangesState repo={repo} reference={reference} toggleShowChanges={toggleShowChangesOnly} />;
+            return (
+                <ObjectListFrame>
+                    <EmptyChangesState repo={repo} reference={reference} toggleShowChanges={toggleShowChangesOnly} />
+                </ObjectListFrame>
+            );
         }
 
         const committedRef = reference.id + '@';
@@ -1083,7 +1116,7 @@ export const TreeContainer = ({
         );
 
         return (
-            <>
+            <ObjectListFrame>
                 {actionError && <AlertError error={actionError} onDismiss={() => setActionError(null)} />}
                 <ChangesTreeContainer
                     results={changesResults}
@@ -1126,13 +1159,13 @@ export const TreeContainer = ({
                         />
                     }
                 />
-            </>
+            </ObjectListFrame>
         );
     }
 
     // Regular objects view
     return (
-        <>
+        <ObjectListFrame>
             {deleteState.error && (
                 <AlertError error={deleteState.error} onDismiss={() => setDeleteState(initialState)} />
             )}
@@ -1159,7 +1192,7 @@ export const TreeContainer = ({
                         .then(onRefresh);
                 }}
             />
-        </>
+        </ObjectListFrame>
     );
 };
 
@@ -1558,6 +1591,14 @@ const ObjectsBrowser = ({ storageConfig }) => {
                 ) : (
                     <>
                         <TreeContainer
+                            key={JSON.stringify([
+                                repo.id,
+                                reference.type,
+                                reference.id,
+                                path || '',
+                                after || '',
+                                showChangesOnly,
+                            ])}
                             config={storageConfig}
                             reference={reference}
                             repo={repo}
