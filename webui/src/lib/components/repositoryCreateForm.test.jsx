@@ -56,3 +56,29 @@ test('repository create form submits selected storage backend and warning', asyn
         });
     });
 });
+
+test('backend labels include storage IDs without repeating identical descriptions', () => {
+    render(
+        <RepositoryCreateForm
+            formID="repository-create-form"
+            configs={[
+                { ...storageConfig('minio-a'), blockstore_description: 'Primary local MinIO storage' },
+                { ...storageConfig('minio-b'), blockstore_description: 'Secondary local MinIO storage' },
+                { ...storageConfig('unnamed'), blockstore_description: undefined },
+                { ...storageConfig('empty'), blockstore_description: '' },
+                storageConfig('same'),
+            ]}
+            formValid={true}
+            setFormValid={vi.fn()}
+            onSubmit={vi.fn()}
+        />,
+    );
+
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+        'Primary local MinIO storage · minio-a',
+        'Secondary local MinIO storage · minio-b',
+        'unnamed',
+        'empty',
+        'same',
+    ]);
+});

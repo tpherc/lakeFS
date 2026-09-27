@@ -310,6 +310,7 @@ const ImportModal = ({ config, repoId, referenceId, referenceType, path = '', on
                         <ImportForm
                             config={sourceConfig}
                             storageConfigs={serverConfig?.storages}
+                            repositoryStorageID={config?.blockstore_id}
                             sourceStorageID={sourceStorageID}
                             onSourceStorageChange={setSourceStorageID}
                             repo={repoId}

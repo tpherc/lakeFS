@@ -7,6 +7,8 @@ import React, { useEffect, useState } from 'react';
 import Button from 'react-bootstrap/Button';
 import Alert from 'react-bootstrap/Alert';
 import Form from 'react-bootstrap/Form';
+import Badge from 'react-bootstrap/Badge';
+import { storageBackendLabel } from '../../../lib/utils/storageBackendLabel';
 import { MetadataFields } from '../../../lib/components/repository/metadata';
 
 const ImportPhase = {
@@ -96,6 +98,7 @@ const ExecuteImportButton = ({ isEnabled, importPhase, importFunc, doneFunc }) =
 const ImportForm = ({
     config,
     storageConfigs,
+    repositoryStorageID,
     sourceStorageID = '',
     onSourceStorageChange,
     pathStyle,
@@ -112,6 +115,8 @@ const ImportForm = ({
     ...rest
 }) => {
     const [source, setSource] = useState('');
+    const hasRepositoryBackend = storageConfigs?.some((storage) => storage.blockstore_id === repositoryStorageID);
+    const selectedSourceID = sourceStorageID === repositoryStorageID ? '' : sourceStorageID;
     const importValidityRegexStr = config?.import_validity_regex ?? '';
     const isSourceValid = Boolean(config?.import_support && source && RegExp(importValidityRegexStr).test(source));
     useEffect(() => {
@@ -132,18 +137,27 @@ const ImportForm = ({
                 {storageConfigs?.length > 1 && onSourceStorageChange && (
                     <Form.Group controlId="import-source-storage">
                         <Form.Label>Source backend</Form.Label>
+                        {hasRepositoryBackend && !selectedSourceID && (
+                            <Badge bg="primary" pill className="ms-2">
+                                Repository default
+                            </Badge>
+                        )}
                         <Form.Select
-                            value={sourceStorageID}
+                            value={selectedSourceID}
                             onChange={(event) => onSourceStorageChange(event.target.value)}
                         >
-                            <option value="">Repository backend</option>
+                            {!hasRepositoryBackend && (
+                                <option value="" disabled>
+                                    Choose source backend
+                                </option>
+                            )}
                             {storageConfigs.map((storage) => (
                                 <option
                                     key={storage.blockstore_id}
-                                    value={storage.blockstore_id}
+                                    value={storage.blockstore_id === repositoryStorageID ? '' : storage.blockstore_id}
                                     disabled={!storage.import_support}
                                 >
-                                    {storage.blockstore_description || storage.blockstore_id}
+                                    {storageBackendLabel(storage)}
                                 </option>
                             ))}
                         </Form.Select>

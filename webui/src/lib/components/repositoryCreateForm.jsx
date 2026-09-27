@@ -4,6 +4,7 @@ import Alert from 'react-bootstrap/Alert';
 import { Warnings } from './controls';
 import { FloatingLabel } from 'react-bootstrap';
 import Accordion from 'react-bootstrap/Accordion';
+import { storageBackendLabel } from '../utils/storageBackendLabel';
 import { getRepositoryStorageConfigs, getSelectedRepositoryStorageConfig } from './repositoryCreateFormStorage';
 
 const DEFAULT_BLOCKSTORE_EXAMPLE = 'e.g. s3://example-bucket/';
@@ -129,7 +130,7 @@ export const RepositoryCreateForm = ({ formID, config, configs, onSubmit, formVa
                         <Form.Select value={selectedStorageID} onChange={onStorageChange}>
                             {storageConfigs.map((storageConfig) => (
                                 <option key={storageConfig.blockstore_id} value={storageConfig.blockstore_id}>
-                                    {storageConfig.blockstore_description || storageConfig.blockstore_id}
+                                    {storageBackendLabel(storageConfig)}
                                 </option>
                             ))}
                         </Form.Select>
