@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 
 import dayjs from 'dayjs';
 import {
@@ -49,34 +49,14 @@ export const humanSize = (bytes) => {
 const Na = () => <span>&mdash;</span>;
 
 const EntryRowActions = ({ repo, reference, entry, onDelete, presign, presign_ui = false }) => {
-    const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
-    const handleCloseDeleteConfirmation = () => setShowDeleteConfirmation(false);
-    const handleShowDeleteConfirmation = () => setShowDeleteConfirmation(true);
-    const deleteConfirmMsg = `are you sure you wish to delete object "${entry.path}"?`;
+    const [dialog, setDialog] = useState(null);
+    const openDialog = (kind) => setDialog({ kind, visible: true });
+    // Keep the selected dialog mounted while Bootstrap finishes closing and restores focus.
+    const closeDialog = () => setDialog((current) => current && { ...current, visible: false });
     const onSubmitDeletion = () => {
         onDelete(entry);
-        setShowDeleteConfirmation(false);
+        closeDialog();
     };
-
-    const [showObjectStat, setShowObjectStat] = useState(false);
-    const [showObjectOrigin, setShowObjectOrigin] = useState(false);
-    const [showPrefixSize, setShowPrefixSize] = useState(false);
-
-    const handleShowObjectOrigin = useCallback(
-        (e) => {
-            e.preventDefault();
-            setShowObjectOrigin(true);
-        },
-        [setShowObjectOrigin],
-    );
-
-    const handleShowPrefixSize = useCallback(
-        (e) => {
-            e.preventDefault();
-            setShowPrefixSize(true);
-        },
-        [setShowPrefixSize],
-    );
 
     return (
         <>
@@ -128,14 +108,19 @@ const EntryRowActions = ({ repo, reference, entry, onDelete, presign, presign_ui
                         <Dropdown.Item
                             onClick={(e) => {
                                 e.preventDefault();
-                                setShowObjectStat(true);
+                                openDialog('info');
                             }}
                         >
                             <InfoIcon /> Object Info
                         </Dropdown.Item>
                     )}
 
-                    <Dropdown.Item onClick={handleShowObjectOrigin}>
+                    <Dropdown.Item
+                        onClick={(e) => {
+                            e.preventDefault();
+                            openDialog('blame');
+                        }}
+                    >
                         <LogIcon /> Blame
                     </Dropdown.Item>
 
@@ -154,7 +139,7 @@ const EntryRowActions = ({ repo, reference, entry, onDelete, presign, presign_ui
                             <Dropdown.Item
                                 onClick={(e) => {
                                     e.preventDefault();
-                                    handleShowDeleteConfirmation();
+                                    openDialog('delete');
                                 }}
                             >
                                 <TrashIcon /> Delete
@@ -163,37 +148,48 @@ const EntryRowActions = ({ repo, reference, entry, onDelete, presign, presign_ui
                     )}
 
                     {entry.path_type === 'common_prefix' && (
-                        <Dropdown.Item onClick={handleShowPrefixSize}>
+                        <Dropdown.Item
+                            onClick={(e) => {
+                                e.preventDefault();
+                                openDialog('size');
+                            }}
+                        >
                             <BeakerIcon /> Calculate Size
                         </Dropdown.Item>
                     )}
                 </Dropdown.Menu>
             </Dropdown>
 
-            <ConfirmationModal
-                show={showDeleteConfirmation}
-                onHide={handleCloseDeleteConfirmation}
-                msg={deleteConfirmMsg}
-                onConfirm={onSubmitDeletion}
-            />
+            {dialog?.kind === 'delete' && (
+                <ConfirmationModal
+                    show={dialog.visible}
+                    onHide={closeDialog}
+                    msg={`are you sure you wish to delete object "${entry.path}"?`}
+                    onConfirm={onSubmitDeletion}
+                />
+            )}
 
-            <StatModal entry={entry} show={showObjectStat} onHide={() => setShowObjectStat(false)} />
+            {dialog?.kind === 'info' && <StatModal entry={entry} show={dialog.visible} onHide={closeDialog} />}
 
-            <OriginModal
-                entry={entry}
-                repo={repo}
-                reference={reference}
-                show={showObjectOrigin}
-                onHide={() => setShowObjectOrigin(false)}
-            />
+            {dialog?.kind === 'blame' && (
+                <OriginModal
+                    entry={entry}
+                    repo={repo}
+                    reference={reference}
+                    show={dialog.visible}
+                    onHide={closeDialog}
+                />
+            )}
 
-            <PrefixSizeModal
-                entry={entry}
-                repo={repo}
-                reference={reference}
-                show={showPrefixSize}
-                onHide={() => setShowPrefixSize(false)}
-            />
+            {dialog?.kind === 'size' && (
+                <PrefixSizeModal
+                    entry={entry}
+                    repo={repo}
+                    reference={reference}
+                    show={dialog.visible}
+                    onHide={closeDialog}
+                />
+            )}
         </>
     );
 };
