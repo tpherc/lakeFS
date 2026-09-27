@@ -1,6 +1,10 @@
 package retention
 
-import "github.com/treeverse/lakefs/pkg/graveler"
+import (
+	"errors"
+
+	"github.com/treeverse/lakefs/pkg/graveler"
+)
 
 // A GCStartingPoint represents a commit from which the GC algorithm should start scanning.
 // It could be either a branch HEAD, or a dangling commit.
@@ -66,10 +70,7 @@ func (sp *GCStartingPointIterator) Value() *GCStartingPoint {
 }
 
 func (sp *GCStartingPointIterator) Err() error {
-	if sp.branchIterator != nil {
-		return sp.branchIterator.Err()
-	}
-	return sp.commitIterator.Err()
+	return errors.Join(sp.branchIterator.Err(), sp.commitIterator.Err())
 }
 
 func (sp *GCStartingPointIterator) Close() {

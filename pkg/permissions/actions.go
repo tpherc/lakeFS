@@ -66,6 +66,7 @@ const (
 	ReadExternalPrincipalAction               = "auth:ReadExternalPrincipal"
 	ReadActionsAction                         = "ci:ReadAction"
 	PrepareGarbageCollectionCommitsAction     = "retention:PrepareGarbageCollectionCommits"
+	PrepareGarbageCollectionReferencesAction  = "retention:PrepareGarbageCollectionReferences"
 	GetGarbageCollectionRulesAction           = "retention:GetGarbageCollectionRules"
 	SetGarbageCollectionRulesAction           = "retention:SetGarbageCollectionRules"
 	PrepareGarbageCollectionUncommittedAction = "retention:PrepareGarbageCollectionUncommitted"

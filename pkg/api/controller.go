@@ -3127,6 +3127,12 @@ func handleApiErrorCallback(log logging.Logger, w http.ResponseWriter, r *http.R
 		log.Debug("Lock not acquired")
 		cb(w, r, http.StatusInternalServerError, "branch is currently locked, try again later")
 
+	case errors.Is(err, catalog.ErrGCReferencesExpired):
+		cb(w, r, http.StatusGone, err)
+
+	case errors.Is(err, catalog.ErrGCReferencesInvalid):
+		cb(w, r, http.StatusConflict, err)
+
 	case errors.Is(err, graveler.ErrRepositoryInDeletion):
 		cb(w, r, http.StatusGone, err)
 

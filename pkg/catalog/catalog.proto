@@ -96,3 +96,10 @@ message MergeAsyncStatusData {
 message TaskMsg {
   Task task = 1;
 }
+
+// GCReferencesTaskData keeps the generic task envelope compatible with task cleanup.
+// The operation-specific JSON payload binds its immutable scan context and final result.
+message GCReferencesTaskData {
+  Task task = 1;
+  bytes data = 2;
+}

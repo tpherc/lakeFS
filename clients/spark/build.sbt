@@ -1,7 +1,7 @@
-lazy val projectVersion = "0.22.0"
+lazy val projectVersion = "0.23.0-SNAPSHOT"
 ThisBuild / version := projectVersion
 lazy val hadoopVersion = "3.3.6"
-ThisBuild / isSnapshot := false
+ThisBuild / isSnapshot := true
 ThisBuild / scalaVersion := "2.12.18"
 lazy val scala212 = "2.12.18"
 lazy val scala213 = "2.13.14"
@@ -91,7 +91,6 @@ dependencyOverrides ++= (CrossVersion.partialVersion(scalaVersion.value) match {
 })
 
 libraryDependencies ++= Seq(
-  "io.lakefs" % "sdk" % "1.72.0",
   "org.apache.spark" %% "spark-sql" % (CrossVersion.partialVersion(scalaVersion.value) match {
     case Some((2, 12)) => "3.1.2"
     case _             => "4.0.0"
@@ -275,3 +274,28 @@ assembly / assemblyMergeStrategy := {
 }
 
 ThisBuild / versionScheme := Some("early-semver")
+
+// Compile the generated SDK from this checkout so GC protocol changes cannot use a stale jar.
+lazy val generatedJavaSDK = (project in file("generated-java-sdk")).settings(
+  Compile / unmanagedSourceDirectories := Seq(
+    baseDirectory.value / ".." / ".." / "java" / "src" / "main" / "java"
+  ),
+  name := "lakefs-generated-java-sdk",
+  autoScalaLibrary := false,
+  crossPaths := false,
+  Test / sources := Seq.empty,
+  javacOptions ++= Seq("-source", "8", "-target", "8"),
+  libraryDependencies ++= Seq(
+    "com.google.code.findbugs" % "jsr305" % "3.0.2",
+    "com.squareup.okhttp3" % "okhttp" % "4.12.0",
+    "com.squareup.okhttp3" % "logging-interceptor" % "4.12.0",
+    "com.google.code.gson" % "gson" % "2.9.1",
+    "io.gsonfire" % "gson-fire" % "1.8.5",
+    "org.apache.commons" % "commons-lang3" % "3.12.0",
+    "jakarta.annotation" % "jakarta.annotation-api" % "1.3.5",
+    "org.openapitools" % "jackson-databind-nullable" % "0.2.6",
+    "javax.ws.rs" % "jsr311-api" % "1.1.1",
+    "javax.ws.rs" % "javax.ws.rs-api" % "2.1.1"
+  )
+)
+lazy val root = (project in file(".")).dependsOn(generatedJavaSDK)

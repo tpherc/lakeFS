@@ -44,6 +44,8 @@ import io.lakefs.clients.sdk.model.ObjectStats;
 import io.lakefs.clients.sdk.model.PrepareGCUncommittedRequest;
 import io.lakefs.clients.sdk.model.PrepareGCUncommittedResponse;
 import io.lakefs.clients.sdk.model.PrepareGarbageCollectionCommitsStatus;
+import io.lakefs.clients.sdk.model.PrepareGarbageCollectionReferencesRequest;
+import io.lakefs.clients.sdk.model.PrepareGarbageCollectionReferencesStatus;
 import io.lakefs.clients.sdk.model.RefsDump;
 import io.lakefs.clients.sdk.model.RefsRestore;
 import io.lakefs.clients.sdk.model.RepositoryMetadataKeys;
@@ -4035,6 +4037,381 @@ public class InternalApi {
      */
     public APIprepareGarbageCollectionCommitsStatusRequest prepareGarbageCollectionCommitsStatus(String repository, String id) {
         return new APIprepareGarbageCollectionCommitsStatusRequest(repository, id);
+    }
+    private okhttp3.Call prepareGarbageCollectionReferencesAsyncCall(String repository, PrepareGarbageCollectionReferencesRequest prepareGarbageCollectionReferencesRequest, final ApiCallback _callback) throws ApiException {
+        String basePath = null;
+        // Operation Servers
+        String[] localBasePaths = new String[] {  };
+
+        // Determine Base Path to Use
+        if (localCustomBaseUrl != null){
+            basePath = localCustomBaseUrl;
+        } else if ( localBasePaths.length > 0 ) {
+            basePath = localBasePaths[localHostIndex];
+        } else {
+            basePath = null;
+        }
+
+        Object localVarPostBody = prepareGarbageCollectionReferencesRequest;
+
+        // create path and map variables
+        String localVarPath = "/repositories/{repository}/gc/prepare_references/async"
+            .replace("{" + "repository" + "}", localVarApiClient.escapeString(repository.toString()));
+
+        List<Pair> localVarQueryParams = new ArrayList<Pair>();
+        List<Pair> localVarCollectionQueryParams = new ArrayList<Pair>();
+        Map<String, String> localVarHeaderParams = new HashMap<String, String>();
+        Map<String, String> localVarCookieParams = new HashMap<String, String>();
+        Map<String, Object> localVarFormParams = new HashMap<String, Object>();
+
+        final String[] localVarAccepts = {
+            "application/json"
+        };
+        final String localVarAccept = localVarApiClient.selectHeaderAccept(localVarAccepts);
+        if (localVarAccept != null) {
+            localVarHeaderParams.put("Accept", localVarAccept);
+        }
+
+        final String[] localVarContentTypes = {
+            "application/json"
+        };
+        final String localVarContentType = localVarApiClient.selectHeaderContentType(localVarContentTypes);
+        if (localVarContentType != null) {
+            localVarHeaderParams.put("Content-Type", localVarContentType);
+        }
+
+        String[] localVarAuthNames = new String[] { "basic_auth", "cookie_auth", "oidc_auth", "saml_auth", "jwt_token" };
+        return localVarApiClient.buildCall(basePath, localVarPath, "POST", localVarQueryParams, localVarCollectionQueryParams, localVarPostBody, localVarHeaderParams, localVarCookieParams, localVarFormParams, localVarAuthNames, _callback);
+    }
+
+    @SuppressWarnings("rawtypes")
+    private okhttp3.Call prepareGarbageCollectionReferencesAsyncValidateBeforeCall(String repository, PrepareGarbageCollectionReferencesRequest prepareGarbageCollectionReferencesRequest, final ApiCallback _callback) throws ApiException {
+        // verify the required parameter 'repository' is set
+        if (repository == null) {
+            throw new ApiException("Missing the required parameter 'repository' when calling prepareGarbageCollectionReferencesAsync(Async)");
+        }
+
+        // verify the required parameter 'prepareGarbageCollectionReferencesRequest' is set
+        if (prepareGarbageCollectionReferencesRequest == null) {
+            throw new ApiException("Missing the required parameter 'prepareGarbageCollectionReferencesRequest' when calling prepareGarbageCollectionReferencesAsync(Async)");
+        }
+
+        return prepareGarbageCollectionReferencesAsyncCall(repository, prepareGarbageCollectionReferencesRequest, _callback);
+
+    }
+
+
+    private ApiResponse<TaskCreation> prepareGarbageCollectionReferencesAsyncWithHttpInfo(String repository, PrepareGarbageCollectionReferencesRequest prepareGarbageCollectionReferencesRequest) throws ApiException {
+        okhttp3.Call localVarCall = prepareGarbageCollectionReferencesAsyncValidateBeforeCall(repository, prepareGarbageCollectionReferencesRequest, null);
+        Type localVarReturnType = new TypeToken<TaskCreation>(){}.getType();
+        return localVarApiClient.execute(localVarCall, localVarReturnType);
+    }
+
+    private okhttp3.Call prepareGarbageCollectionReferencesAsyncAsync(String repository, PrepareGarbageCollectionReferencesRequest prepareGarbageCollectionReferencesRequest, final ApiCallback<TaskCreation> _callback) throws ApiException {
+
+        okhttp3.Call localVarCall = prepareGarbageCollectionReferencesAsyncValidateBeforeCall(repository, prepareGarbageCollectionReferencesRequest, _callback);
+        Type localVarReturnType = new TypeToken<TaskCreation>(){}.getType();
+        localVarApiClient.executeAsync(localVarCall, localVarReturnType, _callback);
+        return localVarCall;
+    }
+
+    public class APIprepareGarbageCollectionReferencesAsyncRequest {
+        private final String repository;
+        private final PrepareGarbageCollectionReferencesRequest prepareGarbageCollectionReferencesRequest;
+
+        private APIprepareGarbageCollectionReferencesAsyncRequest(String repository, PrepareGarbageCollectionReferencesRequest prepareGarbageCollectionReferencesRequest) {
+            this.repository = repository;
+            this.prepareGarbageCollectionReferencesRequest = prepareGarbageCollectionReferencesRequest;
+        }
+
+        /**
+         * Build call for prepareGarbageCollectionReferencesAsync
+         * @param _callback ApiCallback API callback
+         * @return Call to execute
+         * @throws ApiException If fail to serialize the request body object
+         * @http.response.details
+         <table summary="Response Details" border="1">
+            <tr><td> Status Code </td><td> Description </td><td> Response Headers </td></tr>
+            <tr><td> 202 </td><td> Reference preparation task started </td><td>  -  </td></tr>
+            <tr><td> 400 </td><td> Bad Request </td><td>  -  </td></tr>
+            <tr><td> 401 </td><td> Unauthorized </td><td>  -  </td></tr>
+            <tr><td> 403 </td><td> Forbidden </td><td>  -  </td></tr>
+            <tr><td> 404 </td><td> Resource Not Found </td><td>  -  </td></tr>
+            <tr><td> 0 </td><td> Internal Server Error </td><td>  -  </td></tr>
+         </table>
+         */
+        public okhttp3.Call buildCall(final ApiCallback _callback) throws ApiException {
+            return prepareGarbageCollectionReferencesAsyncCall(repository, prepareGarbageCollectionReferencesRequest, _callback);
+        }
+
+        /**
+         * Execute prepareGarbageCollectionReferencesAsync request
+         * @return TaskCreation
+         * @throws ApiException If fail to call the API, e.g. server error or cannot deserialize the response body
+         * @http.response.details
+         <table summary="Response Details" border="1">
+            <tr><td> Status Code </td><td> Description </td><td> Response Headers </td></tr>
+            <tr><td> 202 </td><td> Reference preparation task started </td><td>  -  </td></tr>
+            <tr><td> 400 </td><td> Bad Request </td><td>  -  </td></tr>
+            <tr><td> 401 </td><td> Unauthorized </td><td>  -  </td></tr>
+            <tr><td> 403 </td><td> Forbidden </td><td>  -  </td></tr>
+            <tr><td> 404 </td><td> Resource Not Found </td><td>  -  </td></tr>
+            <tr><td> 0 </td><td> Internal Server Error </td><td>  -  </td></tr>
+         </table>
+         */
+        public TaskCreation execute() throws ApiException {
+            ApiResponse<TaskCreation> localVarResp = prepareGarbageCollectionReferencesAsyncWithHttpInfo(repository, prepareGarbageCollectionReferencesRequest);
+            return localVarResp.getData();
+        }
+
+        /**
+         * Execute prepareGarbageCollectionReferencesAsync request with HTTP info returned
+         * @return ApiResponse&lt;TaskCreation&gt;
+         * @throws ApiException If fail to call the API, e.g. server error or cannot deserialize the response body
+         * @http.response.details
+         <table summary="Response Details" border="1">
+            <tr><td> Status Code </td><td> Description </td><td> Response Headers </td></tr>
+            <tr><td> 202 </td><td> Reference preparation task started </td><td>  -  </td></tr>
+            <tr><td> 400 </td><td> Bad Request </td><td>  -  </td></tr>
+            <tr><td> 401 </td><td> Unauthorized </td><td>  -  </td></tr>
+            <tr><td> 403 </td><td> Forbidden </td><td>  -  </td></tr>
+            <tr><td> 404 </td><td> Resource Not Found </td><td>  -  </td></tr>
+            <tr><td> 0 </td><td> Internal Server Error </td><td>  -  </td></tr>
+         </table>
+         */
+        public ApiResponse<TaskCreation> executeWithHttpInfo() throws ApiException {
+            return prepareGarbageCollectionReferencesAsyncWithHttpInfo(repository, prepareGarbageCollectionReferencesRequest);
+        }
+
+        /**
+         * Execute prepareGarbageCollectionReferencesAsync request (asynchronously)
+         * @param _callback The callback to be executed when the API call finishes
+         * @return The request call
+         * @throws ApiException If fail to process the API call, e.g. serializing the request body object
+         * @http.response.details
+         <table summary="Response Details" border="1">
+            <tr><td> Status Code </td><td> Description </td><td> Response Headers </td></tr>
+            <tr><td> 202 </td><td> Reference preparation task started </td><td>  -  </td></tr>
+            <tr><td> 400 </td><td> Bad Request </td><td>  -  </td></tr>
+            <tr><td> 401 </td><td> Unauthorized </td><td>  -  </td></tr>
+            <tr><td> 403 </td><td> Forbidden </td><td>  -  </td></tr>
+            <tr><td> 404 </td><td> Resource Not Found </td><td>  -  </td></tr>
+            <tr><td> 0 </td><td> Internal Server Error </td><td>  -  </td></tr>
+         </table>
+         */
+        public okhttp3.Call executeAsync(final ApiCallback<TaskCreation> _callback) throws ApiException {
+            return prepareGarbageCollectionReferencesAsyncAsync(repository, prepareGarbageCollectionReferencesRequest, _callback);
+        }
+    }
+
+    /**
+     * prepare installation-wide physical reference protection for one repository
+     * Requires retention:PrepareGarbageCollectionReferences on resource &#39;*&#39;. This scan reads source catalogs and writes protection artifacts only to the target repository backend.
+     * @param repository  (required)
+     * @param prepareGarbageCollectionReferencesRequest  (required)
+     * @return APIprepareGarbageCollectionReferencesAsyncRequest
+     * @http.response.details
+     <table summary="Response Details" border="1">
+        <tr><td> Status Code </td><td> Description </td><td> Response Headers </td></tr>
+        <tr><td> 202 </td><td> Reference preparation task started </td><td>  -  </td></tr>
+        <tr><td> 400 </td><td> Bad Request </td><td>  -  </td></tr>
+        <tr><td> 401 </td><td> Unauthorized </td><td>  -  </td></tr>
+        <tr><td> 403 </td><td> Forbidden </td><td>  -  </td></tr>
+        <tr><td> 404 </td><td> Resource Not Found </td><td>  -  </td></tr>
+        <tr><td> 0 </td><td> Internal Server Error </td><td>  -  </td></tr>
+     </table>
+     */
+    public APIprepareGarbageCollectionReferencesAsyncRequest prepareGarbageCollectionReferencesAsync(String repository, PrepareGarbageCollectionReferencesRequest prepareGarbageCollectionReferencesRequest) {
+        return new APIprepareGarbageCollectionReferencesAsyncRequest(repository, prepareGarbageCollectionReferencesRequest);
+    }
+    private okhttp3.Call prepareGarbageCollectionReferencesStatusCall(String repository, String id, final ApiCallback _callback) throws ApiException {
+        String basePath = null;
+        // Operation Servers
+        String[] localBasePaths = new String[] {  };
+
+        // Determine Base Path to Use
+        if (localCustomBaseUrl != null){
+            basePath = localCustomBaseUrl;
+        } else if ( localBasePaths.length > 0 ) {
+            basePath = localBasePaths[localHostIndex];
+        } else {
+            basePath = null;
+        }
+
+        Object localVarPostBody = null;
+
+        // create path and map variables
+        String localVarPath = "/repositories/{repository}/gc/prepare_references/status"
+            .replace("{" + "repository" + "}", localVarApiClient.escapeString(repository.toString()));
+
+        List<Pair> localVarQueryParams = new ArrayList<Pair>();
+        List<Pair> localVarCollectionQueryParams = new ArrayList<Pair>();
+        Map<String, String> localVarHeaderParams = new HashMap<String, String>();
+        Map<String, String> localVarCookieParams = new HashMap<String, String>();
+        Map<String, Object> localVarFormParams = new HashMap<String, Object>();
+
+        if (id != null) {
+            localVarQueryParams.addAll(localVarApiClient.parameterToPair("id", id));
+        }
+
+        final String[] localVarAccepts = {
+            "application/json"
+        };
+        final String localVarAccept = localVarApiClient.selectHeaderAccept(localVarAccepts);
+        if (localVarAccept != null) {
+            localVarHeaderParams.put("Accept", localVarAccept);
+        }
+
+        final String[] localVarContentTypes = {
+        };
+        final String localVarContentType = localVarApiClient.selectHeaderContentType(localVarContentTypes);
+        if (localVarContentType != null) {
+            localVarHeaderParams.put("Content-Type", localVarContentType);
+        }
+
+        String[] localVarAuthNames = new String[] { "basic_auth", "cookie_auth", "oidc_auth", "saml_auth", "jwt_token" };
+        return localVarApiClient.buildCall(basePath, localVarPath, "GET", localVarQueryParams, localVarCollectionQueryParams, localVarPostBody, localVarHeaderParams, localVarCookieParams, localVarFormParams, localVarAuthNames, _callback);
+    }
+
+    @SuppressWarnings("rawtypes")
+    private okhttp3.Call prepareGarbageCollectionReferencesStatusValidateBeforeCall(String repository, String id, final ApiCallback _callback) throws ApiException {
+        // verify the required parameter 'repository' is set
+        if (repository == null) {
+            throw new ApiException("Missing the required parameter 'repository' when calling prepareGarbageCollectionReferencesStatus(Async)");
+        }
+
+        // verify the required parameter 'id' is set
+        if (id == null) {
+            throw new ApiException("Missing the required parameter 'id' when calling prepareGarbageCollectionReferencesStatus(Async)");
+        }
+
+        return prepareGarbageCollectionReferencesStatusCall(repository, id, _callback);
+
+    }
+
+
+    private ApiResponse<PrepareGarbageCollectionReferencesStatus> prepareGarbageCollectionReferencesStatusWithHttpInfo(String repository, String id) throws ApiException {
+        okhttp3.Call localVarCall = prepareGarbageCollectionReferencesStatusValidateBeforeCall(repository, id, null);
+        Type localVarReturnType = new TypeToken<PrepareGarbageCollectionReferencesStatus>(){}.getType();
+        return localVarApiClient.execute(localVarCall, localVarReturnType);
+    }
+
+    private okhttp3.Call prepareGarbageCollectionReferencesStatusAsync(String repository, String id, final ApiCallback<PrepareGarbageCollectionReferencesStatus> _callback) throws ApiException {
+
+        okhttp3.Call localVarCall = prepareGarbageCollectionReferencesStatusValidateBeforeCall(repository, id, _callback);
+        Type localVarReturnType = new TypeToken<PrepareGarbageCollectionReferencesStatus>(){}.getType();
+        localVarApiClient.executeAsync(localVarCall, localVarReturnType, _callback);
+        return localVarCall;
+    }
+
+    public class APIprepareGarbageCollectionReferencesStatusRequest {
+        private final String repository;
+        private final String id;
+
+        private APIprepareGarbageCollectionReferencesStatusRequest(String repository, String id) {
+            this.repository = repository;
+            this.id = id;
+        }
+
+        /**
+         * Build call for prepareGarbageCollectionReferencesStatus
+         * @param _callback ApiCallback API callback
+         * @return Call to execute
+         * @throws ApiException If fail to serialize the request body object
+         * @http.response.details
+         <table summary="Response Details" border="1">
+            <tr><td> Status Code </td><td> Description </td><td> Response Headers </td></tr>
+            <tr><td> 200 </td><td> Reference preparation status </td><td>  -  </td></tr>
+            <tr><td> 400 </td><td> Bad Request </td><td>  -  </td></tr>
+            <tr><td> 401 </td><td> Unauthorized </td><td>  -  </td></tr>
+            <tr><td> 403 </td><td> Forbidden </td><td>  -  </td></tr>
+            <tr><td> 404 </td><td> Resource Not Found </td><td>  -  </td></tr>
+            <tr><td> 0 </td><td> Internal Server Error </td><td>  -  </td></tr>
+         </table>
+         */
+        public okhttp3.Call buildCall(final ApiCallback _callback) throws ApiException {
+            return prepareGarbageCollectionReferencesStatusCall(repository, id, _callback);
+        }
+
+        /**
+         * Execute prepareGarbageCollectionReferencesStatus request
+         * @return PrepareGarbageCollectionReferencesStatus
+         * @throws ApiException If fail to call the API, e.g. server error or cannot deserialize the response body
+         * @http.response.details
+         <table summary="Response Details" border="1">
+            <tr><td> Status Code </td><td> Description </td><td> Response Headers </td></tr>
+            <tr><td> 200 </td><td> Reference preparation status </td><td>  -  </td></tr>
+            <tr><td> 400 </td><td> Bad Request </td><td>  -  </td></tr>
+            <tr><td> 401 </td><td> Unauthorized </td><td>  -  </td></tr>
+            <tr><td> 403 </td><td> Forbidden </td><td>  -  </td></tr>
+            <tr><td> 404 </td><td> Resource Not Found </td><td>  -  </td></tr>
+            <tr><td> 0 </td><td> Internal Server Error </td><td>  -  </td></tr>
+         </table>
+         */
+        public PrepareGarbageCollectionReferencesStatus execute() throws ApiException {
+            ApiResponse<PrepareGarbageCollectionReferencesStatus> localVarResp = prepareGarbageCollectionReferencesStatusWithHttpInfo(repository, id);
+            return localVarResp.getData();
+        }
+
+        /**
+         * Execute prepareGarbageCollectionReferencesStatus request with HTTP info returned
+         * @return ApiResponse&lt;PrepareGarbageCollectionReferencesStatus&gt;
+         * @throws ApiException If fail to call the API, e.g. server error or cannot deserialize the response body
+         * @http.response.details
+         <table summary="Response Details" border="1">
+            <tr><td> Status Code </td><td> Description </td><td> Response Headers </td></tr>
+            <tr><td> 200 </td><td> Reference preparation status </td><td>  -  </td></tr>
+            <tr><td> 400 </td><td> Bad Request </td><td>  -  </td></tr>
+            <tr><td> 401 </td><td> Unauthorized </td><td>  -  </td></tr>
+            <tr><td> 403 </td><td> Forbidden </td><td>  -  </td></tr>
+            <tr><td> 404 </td><td> Resource Not Found </td><td>  -  </td></tr>
+            <tr><td> 0 </td><td> Internal Server Error </td><td>  -  </td></tr>
+         </table>
+         */
+        public ApiResponse<PrepareGarbageCollectionReferencesStatus> executeWithHttpInfo() throws ApiException {
+            return prepareGarbageCollectionReferencesStatusWithHttpInfo(repository, id);
+        }
+
+        /**
+         * Execute prepareGarbageCollectionReferencesStatus request (asynchronously)
+         * @param _callback The callback to be executed when the API call finishes
+         * @return The request call
+         * @throws ApiException If fail to process the API call, e.g. serializing the request body object
+         * @http.response.details
+         <table summary="Response Details" border="1">
+            <tr><td> Status Code </td><td> Description </td><td> Response Headers </td></tr>
+            <tr><td> 200 </td><td> Reference preparation status </td><td>  -  </td></tr>
+            <tr><td> 400 </td><td> Bad Request </td><td>  -  </td></tr>
+            <tr><td> 401 </td><td> Unauthorized </td><td>  -  </td></tr>
+            <tr><td> 403 </td><td> Forbidden </td><td>  -  </td></tr>
+            <tr><td> 404 </td><td> Resource Not Found </td><td>  -  </td></tr>
+            <tr><td> 0 </td><td> Internal Server Error </td><td>  -  </td></tr>
+         </table>
+         */
+        public okhttp3.Call executeAsync(final ApiCallback<PrepareGarbageCollectionReferencesStatus> _callback) throws ApiException {
+            return prepareGarbageCollectionReferencesStatusAsync(repository, id, _callback);
+        }
+    }
+
+    /**
+     * validate and get installation-wide reference preparation status
+     * Requires retention:PrepareGarbageCollectionReferences on resource &#39;*&#39;. Successful results are valid only for the captured target instance and the validating server&#39;s current ownership configuration.
+     * @param repository  (required)
+     * @param id  (required)
+     * @return APIprepareGarbageCollectionReferencesStatusRequest
+     * @http.response.details
+     <table summary="Response Details" border="1">
+        <tr><td> Status Code </td><td> Description </td><td> Response Headers </td></tr>
+        <tr><td> 200 </td><td> Reference preparation status </td><td>  -  </td></tr>
+        <tr><td> 400 </td><td> Bad Request </td><td>  -  </td></tr>
+        <tr><td> 401 </td><td> Unauthorized </td><td>  -  </td></tr>
+        <tr><td> 403 </td><td> Forbidden </td><td>  -  </td></tr>
+        <tr><td> 404 </td><td> Resource Not Found </td><td>  -  </td></tr>
+        <tr><td> 0 </td><td> Internal Server Error </td><td>  -  </td></tr>
+     </table>
+     */
+    public APIprepareGarbageCollectionReferencesStatusRequest prepareGarbageCollectionReferencesStatus(String repository, String id) {
+        return new APIprepareGarbageCollectionReferencesStatusRequest(repository, id);
     }
     private okhttp3.Call prepareGarbageCollectionUncommittedCall(String repository, PrepareGCUncommittedRequest prepareGCUncommittedRequest, final ApiCallback _callback) throws ApiException {
         String basePath = null;

@@ -15,7 +15,9 @@ import io.treeverse.clients.StorageUtils.{S3, StorageTypeAzure, StorageTypeGCS, 
 import java.io.FileInputStream
 import java.net.URI
 
-trait StorageClient {}
+trait StorageClient extends AutoCloseable {
+  override def close(): Unit = ()
+}
 
 object StorageClients {
   class S3(storageNamespace: String, region: String, retries: Int, config: ConfigMapper)
@@ -25,6 +27,7 @@ object StorageClients {
     private val bucket: String = storageNSURI.getHost
     @transient lazy val s3Client: AmazonS3 = io.treeverse.clients.S3ClientBuilder
       .build(config.configuration, bucket, region, retries)
+    override def close(): Unit = s3Client.shutdown()
   }
 
   class Azure(config: ConfigMapper, storageNamespace: String)
@@ -35,7 +38,7 @@ object StorageClients {
       StorageUtils.AzureBlob.uriToStorageAccountUrl(storageNSURI)
     private val storageAccountName: String =
       StorageUtils.AzureBlob.uriToStorageAccountName(storageNSURI)
-    @transient private lazy val blobServiceClient: BlobServiceClient =
+    @transient lazy val blobServiceClient: BlobServiceClient =
       getBlobServiceClient(storageAccountUrl, storageAccountName, config)
     @transient lazy val blobBatchClient: BlobBatchClient = new BlobBatchClientBuilder(
       blobServiceClient
@@ -84,11 +87,14 @@ object StorageClients {
   class GCS(config: ConfigMapper) extends StorageClient with Serializable {
     private val credJson =
       config.configuration.get("google.cloud.auth.service.account.json.keyfile")
-    @transient lazy val gcsClient: Storage = StorageOptions
-      .newBuilder()
-      .setCredentials(ServiceAccountCredentials.fromStream(new FileInputStream(credJson)))
-      .build()
-      .getService
+    @transient lazy val gcsClient: Storage = {
+      val input = new FileInputStream(credJson)
+      val credentials =
+        try ServiceAccountCredentials.fromStream(input)
+        finally input.close()
+      StorageOptions.newBuilder().setCredentials(credentials).build().getService
+    }
+    override def close(): Unit = gcsClient.close()
   }
 
   def apply(

@@ -791,6 +791,60 @@ func (x *TaskMsg) GetTask() *Task {
 	return nil
 }
 
+// GCReferencesTaskData keeps the generic task envelope compatible with task cleanup.
+// The operation-specific JSON payload binds its immutable scan context and final result.
+type GCReferencesTaskData struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Task          *Task                  `protobuf:"bytes,1,opt,name=task,proto3" json:"task,omitempty"`
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GCReferencesTaskData) Reset() {
+	*x = GCReferencesTaskData{}
+	mi := &file_catalog_catalog_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GCReferencesTaskData) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GCReferencesTaskData) ProtoMessage() {}
+
+func (x *GCReferencesTaskData) ProtoReflect() protoreflect.Message {
+	mi := &file_catalog_catalog_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GCReferencesTaskData.ProtoReflect.Descriptor instead.
+func (*GCReferencesTaskData) Descriptor() ([]byte, []int) {
+	return file_catalog_catalog_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *GCReferencesTaskData) GetTask() *Task {
+	if x != nil {
+		return x.Task
+	}
+	return nil
+}
+
+func (x *GCReferencesTaskData) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
 var File_catalog_catalog_proto protoreflect.FileDescriptor
 
 const file_catalog_catalog_proto_rawDesc = "" +
@@ -852,7 +906,10 @@ const file_catalog_catalog_proto_rawDesc = "" +
 	"\x04task\x18\x01 \x01(\v2\r.catalog.TaskR\x04task\x12&\n" +
 	"\x04info\x18\x02 \x01(\v2\x12.catalog.MergeDataR\x04info\",\n" +
 	"\aTaskMsg\x12!\n" +
-	"\x04task\x18\x01 \x01(\v2\r.catalog.TaskR\x04taskB$Z\"github.com/treevese/lakefs/catalogb\x06proto3"
+	"\x04task\x18\x01 \x01(\v2\r.catalog.TaskR\x04task\"M\n" +
+	"\x14GCReferencesTaskData\x12!\n" +
+	"\x04task\x18\x01 \x01(\v2\r.catalog.TaskR\x04task\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04dataB$Z\"github.com/treevese/lakefs/catalogb\x06proto3"
 
 var (
 	file_catalog_catalog_proto_rawDescOnce sync.Once
@@ -867,7 +924,7 @@ func file_catalog_catalog_proto_rawDescGZIP() []byte {
 }
 
 var file_catalog_catalog_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_catalog_catalog_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_catalog_catalog_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_catalog_catalog_proto_goTypes = []any{
 	(Entry_AddressType)(0),                      // 0: catalog.Entry.AddressType
 	(*Entry)(nil),                               // 1: catalog.Entry
@@ -882,31 +939,33 @@ var file_catalog_catalog_proto_goTypes = []any{
 	(*MergeData)(nil),                           // 10: catalog.MergeData
 	(*MergeAsyncStatusData)(nil),                // 11: catalog.MergeAsyncStatusData
 	(*TaskMsg)(nil),                             // 12: catalog.TaskMsg
-	nil,                                         // 13: catalog.Entry.MetadataEntry
-	(*timestamppb.Timestamp)(nil),               // 14: google.protobuf.Timestamp
-	(*graveler.CommitData)(nil),                 // 15: io.treeverse.lakefs.graveler.CommitData
+	(*GCReferencesTaskData)(nil),                // 13: catalog.GCReferencesTaskData
+	nil,                                         // 14: catalog.Entry.MetadataEntry
+	(*timestamppb.Timestamp)(nil),               // 15: google.protobuf.Timestamp
+	(*graveler.CommitData)(nil),                 // 16: io.treeverse.lakefs.graveler.CommitData
 }
 var file_catalog_catalog_proto_depIdxs = []int32{
-	14, // 0: catalog.Entry.last_modified:type_name -> google.protobuf.Timestamp
-	13, // 1: catalog.Entry.metadata:type_name -> catalog.Entry.MetadataEntry
+	15, // 0: catalog.Entry.last_modified:type_name -> google.protobuf.Timestamp
+	14, // 1: catalog.Entry.metadata:type_name -> catalog.Entry.MetadataEntry
 	0,  // 2: catalog.Entry.address_type:type_name -> catalog.Entry.AddressType
-	14, // 3: catalog.Task.updated_at:type_name -> google.protobuf.Timestamp
-	14, // 4: catalog.InstanceHeartbeat.updated_at:type_name -> google.protobuf.Timestamp
+	15, // 3: catalog.Task.updated_at:type_name -> google.protobuf.Timestamp
+	15, // 4: catalog.InstanceHeartbeat.updated_at:type_name -> google.protobuf.Timestamp
 	2,  // 5: catalog.RepositoryDumpStatus.task:type_name -> catalog.Task
 	4,  // 6: catalog.RepositoryDumpStatus.info:type_name -> catalog.RepositoryDumpInfo
 	2,  // 7: catalog.RepositoryRestoreStatus.task:type_name -> catalog.Task
 	2,  // 8: catalog.GarbageCollectionPrepareStatus.task:type_name -> catalog.Task
 	7,  // 9: catalog.GarbageCollectionPrepareStatus.info:type_name -> catalog.GarbageCollectionPrepareCommitsInfo
 	2,  // 10: catalog.CommitAsyncStatusData.task:type_name -> catalog.Task
-	15, // 11: catalog.CommitAsyncStatusData.info:type_name -> io.treeverse.lakefs.graveler.CommitData
+	16, // 11: catalog.CommitAsyncStatusData.info:type_name -> io.treeverse.lakefs.graveler.CommitData
 	2,  // 12: catalog.MergeAsyncStatusData.task:type_name -> catalog.Task
 	10, // 13: catalog.MergeAsyncStatusData.info:type_name -> catalog.MergeData
 	2,  // 14: catalog.TaskMsg.task:type_name -> catalog.Task
-	15, // [15:15] is the sub-list for method output_type
-	15, // [15:15] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	2,  // 15: catalog.GCReferencesTaskData.task:type_name -> catalog.Task
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_catalog_catalog_proto_init() }
@@ -920,7 +979,7 @@ func file_catalog_catalog_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_catalog_catalog_proto_rawDesc), len(file_catalog_catalog_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   13,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -17,8 +17,10 @@ import (
 type storageOwnership map[string]physicalService
 
 type physicalService struct {
-	provider string
-	service  string
+	provider  string
+	service   string
+	routes    []string
+	gcUnknown bool
 }
 
 func newStorageOwnership(cfg config.StorageConfig) storageOwnership {
@@ -39,18 +41,23 @@ func newStorageOwnership(cfg config.StorageConfig) storageOwnership {
 				implicitEndpoint := params.Endpoint == "" && !ignoreSDKEndpoints && (sdkEndpointAmbiguity || params.Profile != "" || params.CredentialsFile != "")
 				if !implicitEndpoint {
 					service.service = s3ServiceIdentity(params.Endpoint, params.Region)
+					service.routes = s3OwnershipRoutes(params.Endpoint, service.service)
 					if params.PreSignedEndpoint != "" {
 						publicService := s3ServiceIdentity(params.PreSignedEndpoint, params.Region)
 						if publicService == "" {
 							service.service = ""
 						} else if service.service != "" {
 							s3Aliases.join(service.service, publicService)
+							service.routes = append(service.routes, s3OwnershipRoutes(params.PreSignedEndpoint, publicService)...)
 						}
 					}
 				}
 			}
 		case block.BlockstoreTypeGS:
 			service.service = "gcs"
+			service.routes = []string{"gcs"}
+			universe := os.Getenv("GOOGLE_CLOUD_UNIVERSE_DOMAIN")
+			service.gcUnknown = os.Getenv("STORAGE_EMULATOR_HOST") != "" || (universe != "" && universe != "googleapis.com")
 		case block.BlockstoreTypeAzure:
 			params, err := storage.BlockstoreAzureParams()
 			if err == nil {
@@ -61,6 +68,9 @@ func newStorageOwnership(cfg config.StorageConfig) storageOwnership {
 				if params.TestEndpointURL != "" {
 					service.service = normalizedServiceEndpoint(params.TestEndpointURL)
 				}
+			}
+			if service.service != "" {
+				service.routes = []string{service.service}
 			}
 		case block.BlockstoreTypeMem:
 			// Each memory adapter owns a separate map, even when its configuration is identical.
@@ -74,6 +84,7 @@ func newStorageOwnership(cfg config.StorageConfig) storageOwnership {
 			result[id] = service
 		}
 	}
+	result.collectGCRoutes()
 	return result
 }
 
@@ -90,6 +101,9 @@ func (a serviceAliases) canonical(service string) string {
 
 func (a serviceAliases) join(first, second string) {
 	first, second = a.canonical(first), a.canonical(second)
+	if first > second {
+		first, second = second, first
+	}
 	if first != second {
 		a[second] = first
 	}
@@ -113,6 +127,8 @@ func hasSDKEndpointContext() bool {
 	return false
 }
 
+const awsCommercialPartition = "aws"
+
 var awsS3Endpoint = regexp.MustCompile(`^s3(?:-fips)?(?:[.-](?:dualstack\.)?([a-z]+(?:-[a-z0-9]+)*-[0-9]+))?\.amazonaws\.com(\.cn)?$`)
 
 func s3ServiceIdentity(endpoint, region string) string {
@@ -134,7 +150,7 @@ func s3ServiceIdentity(endpoint, region string) string {
 				return "aws-cn"
 			}
 			if matches[1] == "" {
-				return "aws"
+				return awsCommercialPartition
 			}
 			return awsPartition(matches[1])
 		}
@@ -152,7 +168,7 @@ func awsPartition(region string) string {
 			return "aws-" + strings.TrimSuffix(prefix, "-")
 		}
 	}
-	return "aws"
+	return awsCommercialPartition
 }
 
 func normalizedServiceEndpoint(endpoint string) string {

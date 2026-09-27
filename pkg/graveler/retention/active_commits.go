@@ -47,6 +47,7 @@ func NewCommitsMap(ctx context.Context, commitGetter RepositoryCommitGetter, sto
 		NumMisses:    int64(0),
 		CommitGetter: commitGetter,
 		Store:        store,
+		Cleanup:      cleanup,
 	}
 
 	it, err := commitGetter.List(ctx)
@@ -55,11 +56,17 @@ func NewCommitsMap(ctx context.Context, commitGetter RepositoryCommitGetter, sto
 	}
 	defer it.Close()
 	for it.Next() {
+		if err := ctx.Err(); err != nil {
+			return CommitsMap{}, err
+		}
 		commit := it.Value()
 		err = c.Set(ctx, commit.CommitID, nodeFromCommit(commit.Commit))
 		if err != nil {
 			return CommitsMap{}, fmt.Errorf("set commit %s in local store: %w", commit.CommitID, err)
 		}
+	}
+	if err := it.Err(); err != nil {
+		return CommitsMap{}, fmt.Errorf("list commits into map: %w", err)
 	}
 	return c, nil
 }
@@ -131,6 +138,10 @@ type MetaRangeIDOrError struct {
 // GetGarbageCollectionCommits returns the sets of active commits, according to the repository's garbage collection rules.
 // See https://github.com/treeverse/lakeFS/issues/1932 for more details.
 func GetGarbageCollectionCommits(ctx context.Context, startingPointIterator *GCStartingPointIterator, commitGetter RepositoryCommitGetter, rules *graveler.GarbageCollectionRules, fsPrefix string) (iter.Seq2[graveler.CommitID, MetaRangeIDOrError], error) {
+	return getGarbageCollectionCommitsAt(ctx, startingPointIterator, commitGetter, rules, fsPrefix, time.Now())
+}
+
+func getGarbageCollectionCommitsAt(ctx context.Context, startingPointIterator *GCStartingPointIterator, commitGetter RepositoryCommitGetter, rules *graveler.GarbageCollectionRules, fsPrefix string, now time.Time) (iter.Seq2[graveler.CommitID, MetaRangeIDOrError], error) {
 	log := logging.FromContext(ctx).WithField("component", "gc")
 
 	defer trace.StartRegion(ctx, "get gc commits").End()
@@ -149,7 +160,7 @@ func GetGarbageCollectionCommits(ctx context.Context, startingPointIterator *GCS
 		return nil, fmt.Errorf("open commits map temp KV: %w", err)
 	}
 	cleanupStore := func() {
-		defer trace.StartRegion(ctx, "delete local commits store")
+		defer trace.StartRegion(ctx, "delete local commits store").End()
 		store.Close()
 		if err := os.RemoveAll(storePath); err != nil {
 			log.WithError(err).Error("Failed to delete GC local commits KV; space wasted")
@@ -158,6 +169,7 @@ func GetGarbageCollectionCommits(ctx context.Context, startingPointIterator *GCS
 
 	commitsMap, err := NewCommitsMap(ctx, commitGetter, store, cleanupStore)
 	if err != nil {
+		cleanupStore()
 		return nil, fmt.Errorf("initial read commits: %w", err)
 	}
 	commitsMapOwned := true
@@ -175,7 +187,6 @@ func GetGarbageCollectionCommits(ctx context.Context, startingPointIterator *GCS
 			Info("Commits map - misses are due to concurrent commits")
 	}()
 
-	now := time.Now()
 	var (
 		lastReport        time.Time
 		numStartingPoints int
@@ -183,6 +194,10 @@ func GetGarbageCollectionCommits(ctx context.Context, startingPointIterator *GCS
 	)
 	trace.WithRegion(ctx, "iterate commits", func() {
 		for startingPointIterator.Next() {
+			if err := ctx.Err(); err != nil {
+				traceErr = err
+				return
+			}
 			if log.IsDebugging() && time.Since(lastReport) > traceReportInterval {
 				l := log.WithFields(logging.Fields{
 					"num_starting_points": numStartingPoints,
@@ -230,6 +245,10 @@ func GetGarbageCollectionCommits(ctx context.Context, startingPointIterator *GCS
 			}
 			// Start traversing the commit's ancestors (path):
 			for commitNode.MainParent != "" {
+				if err := ctx.Err(); err != nil {
+					traceErr = err
+					return
+				}
 				nextCommitID := graveler.CommitID(commitNode.MainParent)
 				if previousThreshold, ok := processed[nextCommitID]; ok && !previousThreshold.After(branchExpirationThreshold) {
 					// If the parent commit was already processed and its
@@ -261,7 +280,7 @@ func GetGarbageCollectionCommits(ctx context.Context, startingPointIterator *GCS
 		}
 	})
 	if traceErr != nil {
-		return nil, err
+		return nil, traceErr
 	}
 	log.WithFields(logging.Fields{
 		"num_starting_points": numStartingPoints,

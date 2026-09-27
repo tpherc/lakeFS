@@ -173,19 +173,33 @@ func (m *Manager) GetRepository(ctx context.Context, repositoryID graveler.Repos
 			return nil, err
 		}
 
-		switch repo.State {
-		case graveler.RepositoryState_ACTIVE:
-			return repo, nil
-		case graveler.RepositoryState_IN_DELETION:
-			return nil, graveler.ErrRepositoryInDeletion
-		default:
-			return nil, fmt.Errorf("invalid repository state (%d) rec: %w", repo.State, graveler.ErrInvalid)
-		}
+		return activeRepository(repo)
 	})
 	if err != nil {
 		return nil, err
 	}
 	return rec.(*graveler.RepositoryRecord), nil
+}
+
+// GetRepositoryUncached reads current repository identity and state without the
+// per-instance cache or batching. GC proofs must detect replacement on other nodes.
+func (m *Manager) GetRepositoryUncached(ctx context.Context, repositoryID graveler.RepositoryID) (*graveler.RepositoryRecord, error) {
+	repo, err := m.getRepository(ctx, repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	return activeRepository(repo)
+}
+
+func activeRepository(repo *graveler.RepositoryRecord) (*graveler.RepositoryRecord, error) {
+	switch repo.State {
+	case graveler.RepositoryState_ACTIVE:
+		return repo, nil
+	case graveler.RepositoryState_IN_DELETION:
+		return nil, graveler.ErrRepositoryInDeletion
+	default:
+		return nil, fmt.Errorf("invalid repository state (%d) rec: %w", repo.State, graveler.ErrInvalid)
+	}
 }
 
 func (m *Manager) createBareRepository(ctx context.Context, repositoryID graveler.RepositoryID, repository graveler.Repository) (*graveler.RepositoryRecord, error) {
