@@ -110,6 +110,10 @@ type EntryDiff struct {
 	Type  graveler.DiffType
 	Path  Path
 	Entry *Entry
+	// Comparison entries retain the versions used to derive the change. Entry
+	// keeps its legacy response meaning, including old statistics on deletions.
+	LeftEntry *Entry
+	BaseEntry *Entry
 }
 
 type EntryIterator interface {
@@ -1924,7 +1928,7 @@ func (c *Catalog) CherryPick(ctx context.Context, repositoryID string, branch st
 	return catalogCommitLog, nil
 }
 
-func (c *Catalog) Diff(ctx context.Context, repositoryID string, leftReference string, rightReference string, params DiffParams) (Differences, bool, error) {
+func (c *Catalog) Diff(ctx context.Context, repositoryID string, leftReference string, rightReference string, params DiffParams, opts ...DiffOptionsFunc) (Differences, bool, error) {
 	left := graveler.Ref(leftReference)
 	right := graveler.Ref(rightReference)
 	if err := validator.Validate([]validator.ValidateArg{
@@ -1943,12 +1947,13 @@ func (c *Catalog) Diff(ctx context.Context, repositoryID string, leftReference s
 	if err != nil {
 		return nil, false, err
 	}
-	it := NewEntryDiffIterator(iter)
+	options := collectDiffOptions(opts)
+	it := newDiffListingIterator(iter, options)
 	defer it.Close()
-	return listDiffHelper(it, params.Prefix, params.Delimiter, params.Limit, params.After)
+	return listDiffHelper(ctx, it, params.Prefix, params.Delimiter, params.Limit, params.After, options.FilterFunc)
 }
 
-func (c *Catalog) Compare(ctx context.Context, repositoryID, leftReference string, rightReference string, params DiffParams) (Differences, bool, error) {
+func (c *Catalog) Compare(ctx context.Context, repositoryID, leftReference string, rightReference string, params DiffParams, opts ...DiffOptionsFunc) (Differences, bool, error) {
 	left := graveler.Ref(leftReference)
 	right := graveler.Ref(rightReference)
 	if err := validator.Validate([]validator.ValidateArg{
@@ -1967,12 +1972,13 @@ func (c *Catalog) Compare(ctx context.Context, repositoryID, leftReference strin
 	if err != nil {
 		return nil, false, err
 	}
-	it := NewEntryDiffIterator(iter)
+	options := collectDiffOptions(opts)
+	it := newDiffListingIterator(iter, options)
 	defer it.Close()
-	return listDiffHelper(it, params.Prefix, params.Delimiter, params.Limit, params.After)
+	return listDiffHelper(ctx, it, params.Prefix, params.Delimiter, params.Limit, params.After, options.FilterFunc)
 }
 
-func (c *Catalog) DiffUncommitted(ctx context.Context, repositoryID, branch, prefix, delimiter string, limit int, after string) (Differences, bool, error) {
+func (c *Catalog) DiffUncommitted(ctx context.Context, repositoryID, branch, prefix, delimiter string, limit int, after string, opts ...DiffOptionsFunc) (Differences, bool, error) {
 	branchID := graveler.BranchID(branch)
 	if err := validator.Validate([]validator.ValidateArg{
 		{Name: "repository", Value: repositoryID, Fn: graveler.ValidateRepositoryID},
@@ -1989,9 +1995,10 @@ func (c *Catalog) DiffUncommitted(ctx context.Context, repositoryID, branch, pre
 	if err != nil {
 		return nil, false, err
 	}
-	it := NewEntryDiffIterator(iter)
+	options := collectDiffOptions(opts)
+	it := newDiffListingIterator(iter, options)
 	defer it.Close()
-	return listDiffHelper(it, prefix, delimiter, limit, after)
+	return listDiffHelper(ctx, it, prefix, delimiter, limit, after, options.FilterFunc)
 }
 
 // GetStartPos returns a key that SeekGE will transform to a place start iterating on all elements in
@@ -2014,9 +2021,18 @@ func GetStartPos(prefix, after, delimiter string) string {
 	return string(graveler.UpperBoundForPrefix([]byte(after)))
 }
 
-const commonPrefixSplitParts = 2
+func diffCommonPrefix(path, prefix, delimiter string) string {
+	if delimiter == "" {
+		return ""
+	}
+	directory, _, found := strings.Cut(strings.TrimPrefix(path, prefix), delimiter)
+	if !found {
+		return ""
+	}
+	return prefix + directory + delimiter
+}
 
-func listDiffHelper(it EntryDiffIterator, prefix, delimiter string, limit int, after string) (Differences, bool, error) {
+func listDiffHelper(ctx context.Context, it EntryDiffIterator, prefix, delimiter string, limit int, after string, filter func(*EntryDiff) (bool, error)) (Differences, bool, error) {
 	if limit < 0 || limit > DiffLimitMax {
 		limit = DiffLimitMax
 	}
@@ -2024,7 +2040,13 @@ func listDiffHelper(it EntryDiffIterator, prefix, delimiter string, limit int, a
 	it.SeekGE(Path(seekStart))
 
 	diffs := make(Differences, 0)
-	for it.Next() {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		if !it.Next() {
+			break
+		}
 		v := it.Value()
 		path := string(v.Path)
 
@@ -2035,45 +2057,45 @@ func listDiffHelper(it EntryDiffIterator, prefix, delimiter string, limit int, a
 			break // we only want things that start with prefix, apparently there are none left
 		}
 
-		if delimiter != "" {
-			// common prefix logic goes here.
-			// for every path, after trimming "prefix", take the string upto-and-including the delimiter
-			// if the received path == the entire remainder, add that object as is
-			// if it's just a part of the name, add it as a "common prefix" entry -
-			//   and skip to next record following all those starting with this prefix
-			pathRelativeToPrefix := strings.TrimPrefix(path, prefix)
-			// we want the common prefix and the remainder
-			parts := strings.SplitN(pathRelativeToPrefix, delimiter, commonPrefixSplitParts)
-			if len(parts) == commonPrefixSplitParts {
-				// a common prefix exists!
-				commonPrefix := prefix + parts[0] + delimiter
-				diffs = append(diffs, Difference{
-					DBEntry: NewDBEntryBuilder().CommonLevel(true).Path(commonPrefix).Build(),
-					// We always return "changed" for common prefixes. Seeing if a common prefix is e.g. deleted is O(N)
-					Type: DifferenceTypePrefixChanged,
-				})
-				if len(diffs) >= limit+1 {
-					break // collected enough results
-				}
-
-				// let's keep collecting records. We want the next record that doesn't
-				//   start with this common prefix
-				it.SeekGE(Path(graveler.UpperBoundForPrefix([]byte(commonPrefix))))
+		if filter != nil {
+			allowed, err := filter(v)
+			if err != nil {
+				return nil, false, err
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, false, err
+			}
+			if !allowed {
 				continue
 			}
 		}
 
-		// got a regular entry
-		diff, err := newDifferenceFromEntryDiff(v)
-		if err != nil {
-			return nil, false, fmt.Errorf("[I] %w", err)
+		commonPrefix := diffCommonPrefix(path, prefix, delimiter)
+		if commonPrefix != "" {
+			diffs = append(diffs, Difference{
+				DBEntry: NewDBEntryBuilder().CommonLevel(true).Path(commonPrefix).Build(),
+				// A prefix denotes an admitted descendant; classifying the entire
+				// directory as added or removed would require scanning every child.
+				Type: DifferenceTypePrefixChanged,
+			})
+		} else {
+			diff, err := newDifferenceFromEntryDiff(v)
+			if err != nil {
+				return nil, false, fmt.Errorf("[I] %w", err)
+			}
+			diffs = append(diffs, diff)
 		}
-		diffs = append(diffs, diff)
 		if len(diffs) >= limit+1 {
 			break
 		}
+		if commonPrefix != "" {
+			it.SeekGE(Path(graveler.UpperBoundForPrefix([]byte(commonPrefix))))
+		}
 	}
 	if err := it.Err(); err != nil {
+		return nil, false, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
 	hasMore := false

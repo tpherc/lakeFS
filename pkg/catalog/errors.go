@@ -10,6 +10,7 @@ import (
 // Define errors we raise from this package - do not convert underlying errors, optionally wrap if needed to consolidate
 var (
 	ErrUnknownStorageOwnership  = errors.New("unknown storage ownership")
+	ErrMissingDiffEntry         = errors.New("diff is missing a required comparison entry")
 	ErrUnknownDiffType          = errors.New("unknown graveler difference type")
 	ErrPathRequiredValue        = fmt.Errorf("missing path: %w", graveler.ErrRequiredValue)
 	ErrInvalidMetadataSrcFormat = errors.New("invalid metadata src format")

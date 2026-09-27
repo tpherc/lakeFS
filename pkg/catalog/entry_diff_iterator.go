@@ -3,44 +3,58 @@ package catalog
 import "github.com/treeverse/lakefs/pkg/graveler"
 
 type entryDiffIterator struct {
-	it    graveler.DiffIterator
-	value *EntryDiff
-	err   error
+	it     graveler.DiffIterator
+	value  *EntryDiff
+	err    error
+	decode func(*graveler.Diff) (*EntryDiff, error)
 }
 
 func NewEntryDiffIterator(it graveler.DiffIterator) EntryDiffIterator {
-	return &entryDiffIterator{
-		it: it,
+	return &entryDiffIterator{it: it, decode: decodeEntryDiff}
+}
+
+func newDiffListingIterator(it graveler.DiffIterator, options DiffOptions) EntryDiffIterator {
+	if options.FilterFunc == nil {
+		return NewEntryDiffIterator(it)
 	}
+	return &entryDiffIterator{it: it, decode: decodeComparisonEntryDiff}
+}
+
+func decodeEntryDiff(diff *graveler.Diff) (*EntryDiff, error) {
+	entry, err := ValueToEntry(diff.Value)
+	if err != nil {
+		return nil, err
+	}
+	return &EntryDiff{Type: diff.Type, Path: Path(diff.Key), Entry: entry}, nil
+}
+
+func decodeComparisonEntryDiff(diff *graveler.Diff) (*EntryDiff, error) {
+	entry, err := decodeEntryDiff(diff)
+	if err != nil {
+		return nil, err
+	}
+	entry.LeftEntry, err = ValueToEntry(diff.LeftValue)
+	if err != nil {
+		return nil, err
+	}
+	entry.BaseEntry, err = ValueToEntry(diff.BaseValue)
+	if err != nil {
+		return nil, err
+	}
+	return entry, nil
 }
 
 func (e *entryDiffIterator) Next() bool {
 	if e.err != nil {
 		return false
 	}
-	if !e.it.Next() {
+	more := e.it.Next()
+	if e.err = e.it.Err(); e.err != nil || !more {
 		e.value = nil
-		e.err = e.it.Err()
 		return false
 	}
-	v := e.it.Value()
-
-	// convert diff value if found to entry
-	var entry *Entry
-	if v.Value != nil {
-		entry, e.err = ValueToEntry(v.Value)
-		if e.err != nil {
-			e.value = nil
-			return false
-		}
-	}
-	// return entry diff
-	e.value = &EntryDiff{
-		Type:  v.Type,
-		Path:  Path(v.Key),
-		Entry: entry,
-	}
-	return true
+	e.value, e.err = e.decode(e.it.Value())
+	return e.err == nil
 }
 
 func (e *entryDiffIterator) SeekGE(id Path) {

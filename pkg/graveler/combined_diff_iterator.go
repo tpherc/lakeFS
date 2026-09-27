@@ -1,6 +1,9 @@
 package graveler
 
-import "bytes"
+import (
+	"bytes"
+	"fmt"
+)
 
 // CombinedDiffIterator calculates the diff between a commit and a branch, including the staging area of the branch.
 // committedDiffIterator is the DiffIterator between the commit and the HEAD of the branch.
@@ -53,7 +56,7 @@ func (c *CombinedDiffIterator) Next() bool {
 		}
 		if c.stagingValue == nil {
 			// nothing on staging - return the original diff
-			c.val = c.committedDiff
+			c.val = c.committedDiff.Copy()
 			c.loadNextCommittedDiff()
 			return true
 		}
@@ -63,7 +66,7 @@ func (c *CombinedDiffIterator) Next() bool {
 		}
 		if committedStagingCompareResult < 0 {
 			// nothing on staging - return the original diff
-			c.val = c.committedDiff
+			c.val = c.committedDiff.Copy()
 			c.loadNextCommittedDiff()
 			return true
 		}
@@ -89,9 +92,16 @@ func (c *CombinedDiffIterator) compareStagingWithLeft() bool {
 	var leftVal *ValueRecord
 	if c.leftIterator.Next() {
 		leftVal = c.leftIterator.Value()
+		if leftVal == nil {
+			c.err = fmt.Errorf("missing committed record: %w", ErrInvalidValue)
+			return false
+		}
 		if !bytes.Equal(leftVal.Key, c.stagingValue.Key) {
 			// key wasn't on left side
 			leftVal = nil
+		} else if leftVal.Value == nil {
+			c.err = fmt.Errorf("missing committed value: %w", ErrInvalidValue)
+			return false
 		}
 	} else if c.leftIterator.Err() != nil {
 		c.err = c.leftIterator.Err()
@@ -99,6 +109,10 @@ func (c *CombinedDiffIterator) compareStagingWithLeft() bool {
 	}
 	var typ DiffType
 	var leftIdentity []byte
+	var leftValue *Value
+	if leftVal != nil {
+		leftValue = leftVal.Value
+	}
 	value := c.stagingValue.Value
 	switch {
 	case leftVal == nil:
@@ -122,12 +136,13 @@ func (c *CombinedDiffIterator) compareStagingWithLeft() bool {
 		}
 		typ = DiffTypeChanged
 	}
-	c.val = &Diff{
+	c.val = (&Diff{
 		Type:         typ,
 		Key:          c.stagingValue.Key,
 		Value:        value,
 		LeftIdentity: leftIdentity,
-	}
+		LeftValue:    leftValue,
+	}).Copy()
 	return true
 }
 
