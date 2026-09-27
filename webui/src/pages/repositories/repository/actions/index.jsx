@@ -190,7 +190,7 @@ const ActionsList = ({ repo, after, onPaginate, branch, commit, onFilterBranch, 
                 </ActionGroup>
             </ActionsBar>
             {content}
-            {results.length > 0 && (
+            {!error && !loading && results.length > 0 && (
                 <div>
                     Actions can be configured to run when predefined events occur.{' '}
                     <a href="https://docs.lakefs.io/howto/hooks/" target="_blank" rel="noreferrer">
