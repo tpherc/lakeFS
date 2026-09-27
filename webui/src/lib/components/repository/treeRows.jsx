@@ -14,8 +14,7 @@ import {
 } from '@primer/octicons-react';
 import ChangeSummary from './changeSummary';
 import { ConfirmationModal } from '../modals';
-import { OverlayTrigger } from 'react-bootstrap';
-import Tooltip from 'react-bootstrap/Tooltip';
+import { Tooltip, TooltipTrigger } from '../tooltips';
 import Button from 'react-bootstrap/Button';
 import { TreeRowType } from '../../../constants';
 
@@ -40,7 +39,7 @@ class RowAction {
 const ChangeRowActions = ({ actions }) => (
     <>
         {actions.map((action) => (
-            <OverlayTrigger
+            <TooltipTrigger
                 key={action.text}
                 placement="bottom"
                 overlay={<Tooltip hidden={!action.tooltip}>{action.tooltip}</Tooltip>}
@@ -55,7 +54,7 @@ const ChangeRowActions = ({ actions }) => (
                 >
                     {action.icon ? action.icon : action.text}
                 </Button>
-            </OverlayTrigger>
+            </TooltipTrigger>
         ))}
     </>
 );
@@ -267,8 +266,8 @@ export const DiffIndicationIcon = ({ entry, rowType }) => {
     }
 
     return (
-        <OverlayTrigger placement="bottom" overlay={<Tooltip id={tooltipId}>{tooltipText}</Tooltip>}>
+        <TooltipTrigger placement="bottom" overlay={<Tooltip id={tooltipId}>{tooltipText}</Tooltip>}>
             <span>{diffIcon}</span>
-        </OverlayTrigger>
+        </TooltipTrigger>
     );
 };

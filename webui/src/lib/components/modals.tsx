@@ -2,8 +2,7 @@ import React, { FC, useMemo, useState, ReactNode, MouseEventHandler, useContext 
 
 import Modal from 'react-bootstrap/Modal';
 import Button from 'react-bootstrap/Button';
-import Tooltip from 'react-bootstrap/Tooltip';
-import { OverlayTrigger } from 'react-bootstrap';
+import { Tooltip, TooltipTrigger } from './tooltips';
 import { ButtonVariant } from 'react-bootstrap/esm/types';
 import { GetUserDisplayNameByIdContext } from '../../pages/auth/users';
 
@@ -105,9 +104,9 @@ export const ConfirmationButton: FC<ConfirmationButtonProps> = ({
     );
     if (tooltip !== null) {
         btn = (
-            <OverlayTrigger placement="bottom" overlay={<Tooltip id="confirmation-tooltip">{tooltip}</Tooltip>}>
+            <TooltipTrigger placement="bottom" overlay={<Tooltip id="confirmation-tooltip">{tooltip}</Tooltip>}>
                 {btn}
-            </OverlayTrigger>
+            </TooltipTrigger>
         );
     }
 
