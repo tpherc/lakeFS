@@ -25,17 +25,19 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+type metadataGatewayOperation struct {
+	name       string
+	method     string
+	query      string
+	copySource string
+	userAgent  string
+	handler    operations.PathOperationHandler
+	status     int
+}
+
 func TestObjectMetadataAuthorization(t *testing.T) {
 	t.Parallel()
-	operationsToTest := []struct {
-		name       string
-		method     string
-		query      string
-		copySource string
-		userAgent  string
-		handler    operations.PathOperationHandler
-		status     int
-	}{
+	operationsToTest := []metadataGatewayOperation{
 		{name: "get", method: http.MethodGet, handler: &operations.GetObject{}, status: http.StatusOK},
 		{name: "head", method: http.MethodHead, handler: &operations.HeadObject{}, status: http.StatusOK},
 		{name: "presigned redirect", method: http.MethodGet, userAgent: "s3RedirectionSupport", handler: &operations.GetObject{}, status: http.StatusTemporaryRedirect},
@@ -47,50 +49,55 @@ func TestObjectMetadataAuthorization(t *testing.T) {
 		t.Run(operation.name, func(t *testing.T) {
 			for _, classification := range []string{"S", "TS", ""} {
 				t.Run("classification="+classification, func(t *testing.T) {
-					store := &objectMetadataStore{t: t, entry: metadataGatewayEntry(classification)}
-					blocks := &objectMetadataBlocks{}
-					service := &objectMetadataAuth{t: t, policies: objectMetadataPolicies(), afterAuthorize: func() {
-						// A concurrent branch change must not replace the entry whose metadata was authorized.
-						store.entry = metadataGatewayEntry("TS")
-					}}
-					req := httptest.NewRequest(operation.method, "/destination/main/file"+operation.query, nil)
-					req.Header.Set(operations.CopySourceHeader, operation.copySource)
-					req.Header.Set("User-Agent", operation.userAgent)
-					// Client-supplied replacement metadata cannot satisfy source read authorization.
-					req.Header.Set("X-Amz-Meta-Dcs:Cls", "S")
-					req.Header.Set("X-Amz-Metadata-Directive", "REPLACE")
-					recorder := serveMetadataGateway(t, req, operation.handler, store, blocks, service)
-					require.Equal(t, 1, service.policyReads, "load one policy snapshot for preliminary and final authorization")
-					expectedPath := gatewaypath.ResolvedAbsolutePath{Repo: "destination", Reference: "main", Path: "file"}
-					if operation.copySource != "" {
-						var err error
-						expectedPath, err = gatewaypath.ResolveAbsolutePath(operation.copySource)
-						require.NoError(t, err)
-					}
-					require.Equal(t, []gatewaypath.ResolvedAbsolutePath{expectedPath}, store.reads, "load the exact source only once")
-					if classification != "S" {
-						require.Equal(t, http.StatusForbidden, recorder.Code)
-						require.Empty(t, blocks.reads, "denied requests must not read, copy, or presign bytes")
-						require.Nil(t, store.written)
-						return
-					}
-					require.Equal(t, operation.status, recorder.Code, recorder.Body.String())
-					for _, read := range blocks.reads {
-						require.Equal(t, "authorized-S", read.Identifier)
-						require.Equal(t, "mem://"+expectedPath.Repo, read.StorageNamespace)
-					}
-					if operation.name != "head" {
-						require.Len(t, blocks.reads, 1)
-					}
-					if operation.name == "get" {
-						require.Equal(t, "authorized bytes", recorder.Body.String())
-					}
-					if operation.name == "head" {
-						require.Equal(t, []string{`"checksum-S"`}, recorder.Header()["ETag"])
-					}
+					testObjectMetadataAuthorization(t, operation, classification)
 				})
 			}
 		})
+	}
+}
+
+func testObjectMetadataAuthorization(t *testing.T, operation metadataGatewayOperation, classification string) {
+	t.Helper()
+	store := &objectMetadataStore{t: t, entry: metadataGatewayEntry(classification)}
+	blocks := &objectMetadataBlocks{}
+	service := &objectMetadataAuth{t: t, policies: objectMetadataPolicies(), afterAuthorize: func() {
+		// A concurrent branch change must not replace the entry whose metadata was authorized.
+		store.entry = metadataGatewayEntry("TS")
+	}}
+	req := httptest.NewRequest(operation.method, "/destination/main/file"+operation.query, nil)
+	req.Header.Set(operations.CopySourceHeader, operation.copySource)
+	req.Header.Set("User-Agent", operation.userAgent)
+	// Client-supplied replacement metadata cannot satisfy source read authorization.
+	req.Header.Set("X-Amz-Meta-Dcs:Cls", "S")
+	req.Header.Set("X-Amz-Metadata-Directive", "REPLACE")
+	recorder := serveMetadataGateway(t, req, operation.handler, store, blocks, service)
+	require.Equal(t, 1, service.policyReads, "load one policy snapshot for preliminary and final authorization")
+	expectedPath := gatewaypath.ResolvedAbsolutePath{Repo: "destination", Reference: "main", Path: "file"}
+	if operation.copySource != "" {
+		var err error
+		expectedPath, err = gatewaypath.ResolveAbsolutePath(operation.copySource)
+		require.NoError(t, err)
+	}
+	require.Equal(t, []gatewaypath.ResolvedAbsolutePath{expectedPath}, store.reads, "load the exact source only once")
+	if classification != "S" {
+		require.Equal(t, http.StatusForbidden, recorder.Code)
+		require.Empty(t, blocks.reads, "denied requests must not read, copy, or presign bytes")
+		require.Nil(t, store.written)
+		return
+	}
+	require.Equal(t, operation.status, recorder.Code, recorder.Body.String())
+	for _, read := range blocks.reads {
+		require.Equal(t, "authorized-S", read.Identifier)
+		require.Equal(t, "mem://"+expectedPath.Repo, read.StorageNamespace)
+	}
+	if operation.name != "head" {
+		require.Len(t, blocks.reads, 1)
+	}
+	if operation.name == "get" {
+		require.Equal(t, "authorized bytes", recorder.Body.String())
+	}
+	if operation.name == "head" {
+		require.Equal(t, []string{`"checksum-S"`}, recorder.Header()["ETag"])
 	}
 }
 

@@ -184,102 +184,100 @@ func TestDiffFilteredHidesUnreadableAdditions(t *testing.T) {
 func TestDiffFilteredRequiresReadableHistoricalVersions(t *testing.T) {
 	for _, mode := range []string{"branch", "two_dot", "three_dot", "default"} {
 		t.Run(mode, func(t *testing.T) {
-			f := newDiffFilterFixture(t, mode)
-			for _, initial := range []struct{ path, class string }{
-				{"removed-u", "U"}, {"removed-ts", "TS"}, {"changed-uu", "U"},
-				{"upgrade", "U"}, {"downgrade", "TS"}, {"changed-ts", "TS"},
-			} {
-				f.put(t, "main", initial.path, initial.class, "old")
-			}
-			f.startChanges(t)
-			for _, path := range []string{"removed-u", "removed-ts"} {
-				require.NoError(t, f.controller.Catalog.DeleteEntry(t.Context(), f.repository, f.right, path))
-			}
-			f.put(t, f.right, "added-u", "U", "new")
-			f.put(t, f.right, "added-ts", "TS", "new")
-			f.put(t, f.right, "changed-uu", "U", "new")
-			f.put(t, f.right, "changed-ts", "TS", "new")
-			// Classification is the only changed field on these two objects.
-			f.put(t, f.right, "upgrade", "TS", "old")
-			f.put(t, f.right, "downgrade", "U", "old")
-			f.finishChanges(t)
-			for _, stats := range []bool{false, true} {
-				recorder, result := f.diff(t, f.request(t, "U"), apigen.DiffRefsParams{IncludeRightStats: &stats})
-				require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-				require.Equal(t, []string{"added-u", "changed-uu", "removed-u"}, diffPaths(result))
-				require.False(t, result.Pagination.HasMore)
-				require.Equal(t, []string{"added", "changed", "removed"}, []string{result.Results[0].Type, result.Results[1].Type, result.Results[2].Type})
-				for _, row := range result.Results {
-					if mode != "branch" && stats {
-						require.NotNil(t, row.Right)
-						require.Equal(t, "U", row.Right.Metadata.AdditionalProperties["dcs:cls"])
-						require.Equal(t, "text/plain", row.Right.ContentType)
-						require.Equal(t, int64(1700000000), row.Right.Mtime)
-						if row.Type == "removed" {
-							require.Equal(t, "removed-u-old", row.Right.Checksum, "preserve legacy deletion statistics")
-						}
-					} else {
-						require.Nil(t, row.Right)
-					}
-				}
-				for _, hidden := range []string{"added-ts", "changed-ts", "removed-ts", "upgrade", "downgrade"} {
-					require.NotContains(t, recorder.Body.String(), hidden)
-				}
-			}
-			recorder, result := f.diff(t, f.request(t, "TS"), apigen.DiffRefsParams{IncludeRightStats: swag.Bool(true)})
-			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-			require.Len(t, result.Results, 8, "fully readable callers retain every legacy diff row")
-			require.Equal(t, 3, f.authorizer.policyLoads)
-			// Each request supplies read permission leaves for two additions, two
-			// deletions and both sides of four changes; IAM may short-circuit denials.
-			require.Equal(t, 36, f.authorizer.readPermissions)
+			testDiffFilteredHistoricalVersions(t, mode)
 		})
 	}
+}
+
+func testDiffFilteredHistoricalVersions(t *testing.T, mode string) {
+	t.Helper()
+	f := newDiffFilterFixture(t, mode)
+	for _, initial := range []struct{ path, class string }{
+		{"removed-u", "U"}, {"removed-ts", "TS"}, {"changed-uu", "U"},
+		{"upgrade", "U"}, {"downgrade", "TS"}, {"changed-ts", "TS"},
+	} {
+		f.put(t, "main", initial.path, initial.class, "old")
+	}
+	f.startChanges(t)
+	for _, path := range []string{"removed-u", "removed-ts"} {
+		require.NoError(t, f.controller.Catalog.DeleteEntry(t.Context(), f.repository, f.right, path))
+	}
+	f.put(t, f.right, "added-u", "U", "new")
+	f.put(t, f.right, "added-ts", "TS", "new")
+	f.put(t, f.right, "changed-uu", "U", "new")
+	f.put(t, f.right, "changed-ts", "TS", "new")
+	// Classification is the only changed field on these two objects.
+	f.put(t, f.right, "upgrade", "TS", "old")
+	f.put(t, f.right, "downgrade", "U", "old")
+	f.finishChanges(t)
+	for _, stats := range []bool{false, true} {
+		recorder, result := f.diff(t, f.request(t, "U"), apigen.DiffRefsParams{IncludeRightStats: &stats})
+		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		require.Equal(t, []string{"added-u", "changed-uu", "removed-u"}, diffPaths(result))
+		require.False(t, result.Pagination.HasMore)
+		require.Equal(t, []string{"added", "changed", "removed"}, []string{result.Results[0].Type, result.Results[1].Type, result.Results[2].Type})
+		requireDiffHistoricalStats(t, result.Results, mode != "branch" && stats)
+		for _, hidden := range []string{"added-ts", "changed-ts", "removed-ts", "upgrade", "downgrade"} {
+			require.NotContains(t, recorder.Body.String(), hidden)
+		}
+	}
+	recorder, result := f.diff(t, f.request(t, "TS"), apigen.DiffRefsParams{IncludeRightStats: swag.Bool(true)})
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Len(t, result.Results, 8, "fully readable callers retain every legacy diff row")
+	require.Equal(t, 3, f.authorizer.policyLoads)
+	// Each request supplies read permission leaves for two additions, two
+	// deletions and both sides of four changes; IAM may short-circuit denials.
+	require.Equal(t, 36, f.authorizer.readPermissions)
 }
 
 func TestDiffFilteredPaginationAndDirectories(t *testing.T) {
 	for _, mode := range []string{"branch", "two_dot", "three_dot", "default"} {
 		t.Run(mode, func(t *testing.T) {
-			f := newDiffFilterFixture(t, mode)
-			f.startChanges(t)
-			for _, object := range []struct{ path, class string }{
-				{"a-hidden/file", "TS"}, {"b-mixed/1-hidden", "TS"}, {"b-mixed/2-visible", "U"},
-				{"b-mixed/3-visible", "U"}, {"c-hidden", "TS"}, {"d-visible", "U"}, {"z-hidden", "TS"},
-			} {
-				f.put(t, f.right, object.path, object.class, "new")
-			}
-			f.finishChanges(t)
-			for _, delimiter := range []apigen.PaginationDelimiter{"", "/"} {
-				params := apigen.DiffRefsParams{Amount: apiutil.Ptr(apigen.PaginationAmount(1)), Delimiter: &delimiter, IncludeRightStats: swag.Bool(true)}
-				expected := []string{"b-mixed/2-visible", "b-mixed/3-visible", "d-visible"}
-				if delimiter == "/" {
-					expected = []string{"b-mixed/", "d-visible"}
-				}
-				for index, path := range expected {
-					recorder, result := f.diff(t, f.request(t, "U"), params)
-					require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-					require.Equal(t, []string{path}, diffPaths(result))
-					require.Equal(t, index+1 < len(expected), result.Pagination.HasMore)
-					if result.Pagination.HasMore {
-						require.Equal(t, path, result.Pagination.NextOffset)
-						after := apigen.PaginationAfter(result.Pagination.NextOffset)
-						params.After = &after
-					} else {
-						require.Empty(t, result.Pagination.NextOffset)
-					}
-					if delimiter == "/" && index == 0 {
-						require.Nil(t, result.Results[0].Right)
-						require.Nil(t, result.Results[0].SizeBytes)
-					}
-				}
-			}
-			prefix := apigen.PaginationPrefix("a-hidden/")
-			recorder, result := f.diff(t, f.request(t, "U"), apigen.DiffRefsParams{Prefix: &prefix})
-			require.Equal(t, http.StatusOK, recorder.Code)
-			require.Empty(t, result.Results)
-			require.False(t, result.Pagination.HasMore)
+			testDiffFilteredPagination(t, mode)
 		})
 	}
+}
+
+func testDiffFilteredPagination(t *testing.T, mode string) {
+	t.Helper()
+	f := newDiffFilterFixture(t, mode)
+	f.startChanges(t)
+	for _, object := range []struct{ path, class string }{
+		{"a-hidden/file", "TS"}, {"b-mixed/1-hidden", "TS"}, {"b-mixed/2-visible", "U"},
+		{"b-mixed/3-visible", "U"}, {"c-hidden", "TS"}, {"d-visible", "U"}, {"z-hidden", "TS"},
+	} {
+		f.put(t, f.right, object.path, object.class, "new")
+	}
+	f.finishChanges(t)
+	for _, delimiter := range []apigen.PaginationDelimiter{"", "/"} {
+		params := apigen.DiffRefsParams{Amount: apiutil.Ptr(apigen.PaginationAmount(1)), Delimiter: &delimiter, IncludeRightStats: swag.Bool(true)}
+		expected := []string{"b-mixed/2-visible", "b-mixed/3-visible", "d-visible"}
+		if delimiter == "/" {
+			expected = []string{"b-mixed/", "d-visible"}
+		}
+		for index, path := range expected {
+			recorder, result := f.diff(t, f.request(t, "U"), params)
+			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+			require.Equal(t, []string{path}, diffPaths(result))
+			require.Equal(t, index+1 < len(expected), result.Pagination.HasMore)
+			if result.Pagination.HasMore {
+				require.Equal(t, path, result.Pagination.NextOffset)
+				after := apigen.PaginationAfter(result.Pagination.NextOffset)
+				params.After = &after
+			} else {
+				require.Empty(t, result.Pagination.NextOffset)
+			}
+			if delimiter == "/" && index == 0 {
+				require.Nil(t, result.Results[0].Right)
+				require.Nil(t, result.Results[0].SizeBytes)
+			}
+		}
+	}
+	prefix := apigen.PaginationPrefix("a-hidden/")
+	recorder, result := f.diff(t, f.request(t, "U"), apigen.DiffRefsParams{Prefix: &prefix})
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Empty(t, result.Results)
+	require.False(t, result.Pagination.HasMore)
 }
 
 func TestDiffFilteredConditionsAndMissingAttributes(t *testing.T) {
@@ -384,56 +382,61 @@ func TestDiffFilteredConflictsRequireEveryExistingVersion(t *testing.T) {
 					continue
 				}
 				t.Run(mode+"/"+conflict+"/hidden="+hiddenSide, func(t *testing.T) {
-					f := newDiffFilterFixture(t, mode)
-					class := func(side string) string {
-						if side == hiddenSide {
-							return "TS"
-						}
-						return "U"
-					}
-					if conflict != "add-add" {
-						f.put(t, "main", "conflict", class("base"), "base")
-					}
-					f.startChanges(t)
-					if conflict == "delete-modify" {
-						require.NoError(t, f.controller.Catalog.DeleteEntry(t.Context(), f.repository, "main", "conflict"))
-					} else {
-						f.put(t, "main", "conflict", class("destination"), "destination")
-					}
-					if conflict == "modify-delete" {
-						require.NoError(t, f.controller.Catalog.DeleteEntry(t.Context(), f.repository, f.right, "conflict"))
-					} else {
-						f.put(t, f.right, "conflict", class("source"), "source")
-					}
-					f.commit(t, "main")
-					f.finishChanges(t)
-					for _, stats := range []bool{false, true} {
-						recorder, result := f.diff(t, f.request(t, "U"), apigen.DiffRefsParams{IncludeRightStats: &stats})
-						require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-						if hiddenSide == "none" {
-							require.Equal(t, []string{"conflict"}, diffPaths(result))
-							require.Equal(t, "conflict", result.Results[0].Type)
-						} else {
-							require.Empty(t, result.Results)
-							require.NotContains(t, recorder.Body.String(), "conflict")
-							require.NotContains(t, recorder.Body.String(), "checksum")
-						}
-					}
-					recorder, result := f.diff(t, f.request(t, "TS"), apigen.DiffRefsParams{IncludeRightStats: swag.Bool(true)})
-					require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-					require.Equal(t, []string{"conflict"}, diffPaths(result))
-					require.Equal(t, "conflict", result.Results[0].Type)
-					revision := "source"
-					if conflict == "modify-delete" {
-						revision = "destination"
-					}
-					require.Equal(t, "conflict-"+revision, result.Results[0].Right.Checksum, "deletion conflicts retain the legacy destination stats")
-					require.Equal(t, 3, f.authorizer.policyLoads)
-					require.LessOrEqual(t, f.authorizer.readPermissions, 9, "at most three version permission leaves per conflict and request")
+					testDiffFilteredConflict(t, mode, conflict, hiddenSide)
 				})
 			}
 		}
 	}
+}
+
+func testDiffFilteredConflict(t *testing.T, mode, conflict, hiddenSide string) {
+	t.Helper()
+	f := newDiffFilterFixture(t, mode)
+	class := func(side string) string {
+		if side == hiddenSide {
+			return "TS"
+		}
+		return "U"
+	}
+	if conflict != "add-add" {
+		f.put(t, "main", "conflict", class("base"), "base")
+	}
+	f.startChanges(t)
+	if conflict == "delete-modify" {
+		require.NoError(t, f.controller.Catalog.DeleteEntry(t.Context(), f.repository, "main", "conflict"))
+	} else {
+		f.put(t, "main", "conflict", class("destination"), "destination")
+	}
+	if conflict == "modify-delete" {
+		require.NoError(t, f.controller.Catalog.DeleteEntry(t.Context(), f.repository, f.right, "conflict"))
+	} else {
+		f.put(t, f.right, "conflict", class("source"), "source")
+	}
+	f.commit(t, "main")
+	f.finishChanges(t)
+	for _, stats := range []bool{false, true} {
+		recorder, result := f.diff(t, f.request(t, "U"), apigen.DiffRefsParams{IncludeRightStats: &stats})
+		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		if hiddenSide == "none" {
+			require.Equal(t, []string{"conflict"}, diffPaths(result))
+			require.Equal(t, "conflict", result.Results[0].Type)
+		} else {
+			require.Empty(t, result.Results)
+			require.NotContains(t, recorder.Body.String(), "conflict")
+			require.NotContains(t, recorder.Body.String(), "checksum")
+		}
+	}
+	recorder, result := f.diff(t, f.request(t, "TS"), apigen.DiffRefsParams{IncludeRightStats: swag.Bool(true)})
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, []string{"conflict"}, diffPaths(result))
+	require.Equal(t, "conflict", result.Results[0].Type)
+	revision := "source"
+	if conflict == "modify-delete" {
+		revision = "destination"
+	}
+	require.Equal(t, "conflict-"+revision, result.Results[0].Right.Checksum, "deletion conflicts retain the legacy destination stats")
+	require.Equal(t, 3, f.authorizer.policyLoads)
+	require.LessOrEqual(t, f.authorizer.readPermissions, 9, "at most three version permission leaves per conflict and request")
 }
 
 func TestDiffFilteredFailuresBeforeCatalog(t *testing.T) {
@@ -474,38 +477,43 @@ func TestDiffFilteredLookaheadAuthorizationFailureIsNotPartial(t *testing.T) {
 	for _, mode := range []string{"branch", "two_dot", "three_dot", "default"} {
 		for _, failure := range []string{"error", "nil response", "unexpected response error"} {
 			t.Run(mode+"/"+failure, func(t *testing.T) {
-				f := newDiffFilterFixture(t, mode)
-				f.startChanges(t)
-				f.put(t, f.right, "first-visible", "U", "private-stats")
-				f.put(t, f.right, "second-visible", "U", "private-stats")
-				f.finishChanges(t)
-				f.authorizer.readAuthorizer = func(ctx context.Context, req *auth.AuthorizationRequest) (*auth.AuthorizationResponse, error) {
-					if f.authorizer.readPermissions == 1 {
-						return f.authorizer.Service.Authorize(ctx, req)
-					}
-					switch failure {
-					case "error":
-						return nil, errors.New("test authorizer unavailable")
-					case "nil response":
-						return nil, nil
-					default:
-						return &auth.AuthorizationResponse{Allowed: true, Error: errors.New("test unexpected authorization response")}, nil
-					}
-				}
-				recorder, _ := f.diff(t, f.request(t, "U"), apigen.DiffRefsParams{Amount: apiutil.Ptr(apigen.PaginationAmount(1)), IncludeRightStats: swag.Bool(true)})
-				expectedStatus := http.StatusInternalServerError
-				if failure == "nil response" {
-					expectedStatus = http.StatusBadRequest
-				}
-				require.Equal(t, expectedStatus, recorder.Code, recorder.Body.String())
-				require.NotContains(t, recorder.Body.String(), "first-visible")
-				require.NotContains(t, recorder.Body.String(), "private-stats")
-				require.NotContains(t, recorder.Body.String(), "pagination")
-				require.Equal(t, 2, f.authorizer.readPermissions)
-				require.Equal(t, 1, f.authorizer.policyLoads)
+				testDiffFilteredLookaheadFailure(t, mode, failure)
 			})
 		}
 	}
+}
+
+func testDiffFilteredLookaheadFailure(t *testing.T, mode, failure string) {
+	t.Helper()
+	f := newDiffFilterFixture(t, mode)
+	f.startChanges(t)
+	f.put(t, f.right, "first-visible", "U", "private-stats")
+	f.put(t, f.right, "second-visible", "U", "private-stats")
+	f.finishChanges(t)
+	f.authorizer.readAuthorizer = func(ctx context.Context, req *auth.AuthorizationRequest) (*auth.AuthorizationResponse, error) {
+		if f.authorizer.readPermissions == 1 {
+			return f.authorizer.Service.Authorize(ctx, req)
+		}
+		switch failure {
+		case "error":
+			return nil, errors.New("test authorizer unavailable")
+		case "nil response":
+			return nil, nil
+		default:
+			return &auth.AuthorizationResponse{Allowed: true, Error: errors.New("test unexpected authorization response")}, nil
+		}
+	}
+	recorder, _ := f.diff(t, f.request(t, "U"), apigen.DiffRefsParams{Amount: apiutil.Ptr(apigen.PaginationAmount(1)), IncludeRightStats: swag.Bool(true)})
+	expectedStatus := http.StatusInternalServerError
+	if failure == "nil response" {
+		expectedStatus = http.StatusBadRequest
+	}
+	require.Equal(t, expectedStatus, recorder.Code, recorder.Body.String())
+	require.NotContains(t, recorder.Body.String(), "first-visible")
+	require.NotContains(t, recorder.Body.String(), "private-stats")
+	require.NotContains(t, recorder.Body.String(), "pagination")
+	require.Equal(t, 2, f.authorizer.readPermissions)
+	require.Equal(t, 1, f.authorizer.policyLoads)
 }
 
 func TestDiffFilteredBasicAuthFallback(t *testing.T) {
@@ -536,52 +544,7 @@ func TestDiffFilteredCompactedDirectoryPagination(t *testing.T) {
 			name = "compacted and staged"
 		}
 		t.Run(name, func(t *testing.T) {
-			f := newDiffFilterFixture(t, "branch")
-			base := f.commit(t, "main")
-			for _, object := range []struct{ path, class string }{
-				{"a-dir/1-visible", "U"}, {"a-dir/2-hidden", "TS"}, {"b-hidden/file", "TS"},
-				{"c-dir/1-visible", "U"}, {"z-last", "U"},
-			} {
-				f.put(t, "main", object.path, object.class, "compacted")
-			}
-			compacted := f.commit(t, "main")
-			// Materialize real SSTs and retain the fresh staging token. The public
-			// ref manager cannot serialize the private compaction attribute;
-			// supply only that attribute through a wrapper during the read.
-			store := f.controller.Catalog.Store.(*graveler.Graveler)
-			repository, err := store.GetRepository(t.Context(), graveler.RepositoryID(f.repository))
-			require.NoError(t, err)
-			tree, err := store.GetCommit(t.Context(), repository, graveler.CommitID(compacted))
-			require.NoError(t, err)
-			branch, err := store.GetBranch(t.Context(), repository, "main")
-			require.NoError(t, err)
-			branch.CommitID = graveler.CommitID(base)
-			require.NoError(t, store.RefManager.SetBranch(t.Context(), repository, "main", *branch))
-			if staged {
-				f.put(t, "main", "a-dir/0-staged", "U", "staged")
-				f.put(t, "main", "c-dir/0-staged", "U", "staged")
-				f.put(t, "main", "d-hidden/file", "TS", "staged")
-			}
-			// Post-commit Actions may still read the original store.
-			readStore := *store
-			readStore.RefManager = &compactedDiffRefManager{RefManager: store.RefManager, compacted: tree.MetaRangeID}
-			f.controller.Catalog = &catalog.Catalog{Store: &readStore}
-			actual, err := readStore.GetBranch(t.Context(), repository, "main")
-			require.NoError(t, err)
-			require.NotEmpty(t, actual.CompactedBaseMetaRangeID)
-			delimiter := apigen.PaginationDelimiter("/")
-			params := apigen.DiffRefsParams{Amount: apiutil.Ptr(apigen.PaginationAmount(1)), Delimiter: &delimiter}
-			for index, expected := range []string{"a-dir/", "c-dir/", "z-last"} {
-				recorder, result := f.diff(t, f.request(t, "U"), params)
-				require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-				require.Equal(t, []string{expected}, diffPaths(result))
-				require.Equal(t, index < 2, result.Pagination.HasMore)
-				if result.Pagination.HasMore {
-					after := apigen.PaginationAfter(result.Pagination.NextOffset)
-					params.After = &after
-				}
-			}
-			require.Equal(t, 3, f.authorizer.policyLoads)
+			testDiffFilteredCompactedPagination(t, staged)
 		})
 	}
 }
@@ -589,6 +552,56 @@ func TestDiffFilteredCompactedDirectoryPagination(t *testing.T) {
 type compactedDiffRefManager struct {
 	graveler.RefManager
 	compacted graveler.MetaRangeID
+}
+
+func testDiffFilteredCompactedPagination(t *testing.T, staged bool) {
+	t.Helper()
+	f := newDiffFilterFixture(t, "branch")
+	base := f.commit(t, "main")
+	for _, object := range []struct{ path, class string }{
+		{"a-dir/1-visible", "U"}, {"a-dir/2-hidden", "TS"}, {"b-hidden/file", "TS"},
+		{"c-dir/1-visible", "U"}, {"z-last", "U"},
+	} {
+		f.put(t, "main", object.path, object.class, "compacted")
+	}
+	compacted := f.commit(t, "main")
+	// Materialize real SSTs and retain the fresh staging token. The public
+	// ref manager cannot serialize the private compaction attribute;
+	// supply only that attribute through a wrapper during the read.
+	store := f.controller.Catalog.Store.(*graveler.Graveler)
+	repository, err := store.GetRepository(t.Context(), graveler.RepositoryID(f.repository))
+	require.NoError(t, err)
+	tree, err := store.GetCommit(t.Context(), repository, graveler.CommitID(compacted))
+	require.NoError(t, err)
+	branch, err := store.GetBranch(t.Context(), repository, "main")
+	require.NoError(t, err)
+	branch.CommitID = graveler.CommitID(base)
+	require.NoError(t, store.RefManager.SetBranch(t.Context(), repository, "main", *branch))
+	if staged {
+		f.put(t, "main", "a-dir/0-staged", "U", "staged")
+		f.put(t, "main", "c-dir/0-staged", "U", "staged")
+		f.put(t, "main", "d-hidden/file", "TS", "staged")
+	}
+	// Post-commit Actions may still read the original store.
+	readStore := *store
+	readStore.RefManager = &compactedDiffRefManager{RefManager: store.RefManager, compacted: tree.MetaRangeID}
+	f.controller.Catalog = &catalog.Catalog{Store: &readStore}
+	actual, err := readStore.GetBranch(t.Context(), repository, "main")
+	require.NoError(t, err)
+	require.NotEmpty(t, actual.CompactedBaseMetaRangeID)
+	delimiter := apigen.PaginationDelimiter("/")
+	params := apigen.DiffRefsParams{Amount: apiutil.Ptr(apigen.PaginationAmount(1)), Delimiter: &delimiter}
+	for index, expected := range []string{"a-dir/", "c-dir/", "z-last"} {
+		recorder, result := f.diff(t, f.request(t, "U"), params)
+		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		require.Equal(t, []string{expected}, diffPaths(result))
+		require.Equal(t, index < 2, result.Pagination.HasMore)
+		if result.Pagination.HasMore {
+			after := apigen.PaginationAfter(result.Pagination.NextOffset)
+			params.After = &after
+		}
+	}
+	require.Equal(t, 3, f.authorizer.policyLoads)
 }
 
 func (m *compactedDiffRefManager) GetBranch(ctx context.Context, repository *graveler.RepositoryRecord, branchID graveler.BranchID) (*graveler.Branch, error) {
@@ -619,4 +632,21 @@ func TestDiffFilteredTwoDotIncludesStagedVersions(t *testing.T) {
 		require.Equal(t, "staged", row.Right.Metadata.AdditionalProperties["revision"])
 	}
 	require.Equal(t, 1, f.authorizer.policyLoads)
+}
+
+func requireDiffHistoricalStats(t *testing.T, results []apigen.Diff, withStats bool) {
+	t.Helper()
+	for _, row := range results {
+		if withStats {
+			require.NotNil(t, row.Right)
+			require.Equal(t, "U", row.Right.Metadata.AdditionalProperties["dcs:cls"])
+			require.Equal(t, "text/plain", row.Right.ContentType)
+			require.Equal(t, int64(1700000000), row.Right.Mtime)
+			if row.Type == "removed" {
+				require.Equal(t, "removed-u-old", row.Right.Checksum, "preserve legacy deletion statistics")
+			}
+		} else {
+			require.Nil(t, row.Right)
+		}
+	}
 }

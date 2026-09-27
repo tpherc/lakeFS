@@ -18,8 +18,8 @@ const ImportPhase = {
     Failed: 3,
 };
 
-const startImport = async (setImportID, prependPath, commitMsg, sourceRef, repoId, refId, metadata = {}, storageID) => {
-    const response = await imports.create(repoId, refId, sourceRef, prependPath, commitMsg, metadata, storageID);
+const startImport = async (setImportID, repoId, refId, options) => {
+    const response = await imports.create(repoId, refId, options);
     setImportID(response.id);
 };
 

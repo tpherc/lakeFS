@@ -281,16 +281,13 @@ const ImportModal = ({ config, repoId, referenceId, referenceType, path = '', on
         setImportPhase(ImportPhase.InProgress);
         try {
             setImportPhase(ImportPhase.InProgress);
-            await startImport(
-                setImportID,
-                destRef.current.value,
-                commitMsgRef.current.value,
-                sourceRef.current.value,
-                repoId,
-                branchId,
+            await startImport(setImportID, repoId, branchId, {
+                source: sourceRef.current.value,
+                destination: destRef.current.value,
+                commitMessage: commitMsgRef.current.value,
                 metadata,
-                sourceStorageID || undefined,
-            );
+                storageID: sourceStorageID || undefined,
+            });
         } catch (error) {
             setImportPhase(ImportPhase.Failed);
             setImportError(error);

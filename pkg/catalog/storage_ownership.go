@@ -26,57 +26,19 @@ type physicalService struct {
 func newStorageOwnership(cfg config.StorageConfig) storageOwnership {
 	result := make(storageOwnership)
 	s3Aliases := make(serviceAliases)
-	ignoreSDKEndpoints := strings.EqualFold(os.Getenv("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS"), "true")
-	sdkEndpointAmbiguity := !ignoreSDKEndpoints && hasSDKEndpointContext()
+	resolver := storageOwnershipResolver{
+		ignoreSDKEndpoints: strings.EqualFold(os.Getenv("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS"), "true"),
+	}
+	resolver.sdkEndpointAmbiguity = !resolver.ignoreSDKEndpoints && hasSDKEndpointContext()
 	for _, id := range cfg.GetStorageIDs() {
 		storage := cfg.GetStorageByID(id)
-		if storage == nil {
-			continue
+		if storage != nil {
+			service, alias := resolver.physicalService(storage, id)
+			result[id] = service
+			if alias != "" {
+				s3Aliases.join(service.service, alias)
+			}
 		}
-		service := physicalService{provider: storage.BlockstoreType()}
-		switch service.provider {
-		case block.BlockstoreTypeS3:
-			params, err := storage.BlockstoreS3Params()
-			if err == nil {
-				implicitEndpoint := params.Endpoint == "" && !ignoreSDKEndpoints && (sdkEndpointAmbiguity || params.Profile != "" || params.CredentialsFile != "")
-				if !implicitEndpoint {
-					service.service = s3ServiceIdentity(params.Endpoint, params.Region)
-					service.routes = s3OwnershipRoutes(params.Endpoint, service.service)
-					if params.PreSignedEndpoint != "" {
-						publicService := s3ServiceIdentity(params.PreSignedEndpoint, params.Region)
-						if publicService == "" {
-							service.service = ""
-						} else if service.service != "" {
-							s3Aliases.join(service.service, publicService)
-							service.routes = append(service.routes, s3OwnershipRoutes(params.PreSignedEndpoint, publicService)...)
-						}
-					}
-				}
-			}
-		case block.BlockstoreTypeGS:
-			service.service = "gcs"
-			service.routes = []string{"gcs"}
-			universe := os.Getenv("GOOGLE_CLOUD_UNIVERSE_DOMAIN")
-			service.gcUnknown = os.Getenv("STORAGE_EMULATOR_HOST") != "" || (universe != "" && universe != "googleapis.com")
-		case block.BlockstoreTypeAzure:
-			params, err := storage.BlockstoreAzureParams()
-			if err == nil {
-				service.service = strings.ToLower(params.Domain)
-				if service.service == "" {
-					service.service = "blob.core.windows.net"
-				}
-				if params.TestEndpointURL != "" {
-					service.service = normalizedServiceEndpoint(params.TestEndpointURL)
-				}
-			}
-			if service.service != "" {
-				service.routes = []string{service.service}
-			}
-		case block.BlockstoreTypeMem:
-			// Each memory adapter owns a separate map, even when its configuration is identical.
-			service.service = id
-		}
-		result[id] = service
 	}
 	for id, service := range result {
 		if service.provider == block.BlockstoreTypeS3 {
@@ -86,6 +48,74 @@ func newStorageOwnership(cfg config.StorageConfig) storageOwnership {
 	}
 	result.collectGCRoutes()
 	return result
+}
+
+type storageOwnershipResolver struct {
+	ignoreSDKEndpoints   bool
+	sdkEndpointAmbiguity bool
+}
+
+func (r storageOwnershipResolver) physicalService(storage config.AdapterConfig, id string) (physicalService, string) {
+	service := physicalService{provider: storage.BlockstoreType()}
+	switch service.provider {
+	case block.BlockstoreTypeS3:
+		return r.s3Service(storage)
+	case block.BlockstoreTypeGS:
+		service.service = "gcs"
+		service.routes = []string{"gcs"}
+		universe := os.Getenv("GOOGLE_CLOUD_UNIVERSE_DOMAIN")
+		service.gcUnknown = os.Getenv("STORAGE_EMULATOR_HOST") != "" || (universe != "" && universe != "googleapis.com")
+	case block.BlockstoreTypeAzure:
+		return azurePhysicalService(storage), ""
+	case block.BlockstoreTypeMem:
+		// Each memory adapter owns a separate map, even when its configuration is identical.
+		service.service = id
+	}
+	return service, ""
+}
+
+func (r storageOwnershipResolver) s3Service(storage config.AdapterConfig) (physicalService, string) {
+	service := physicalService{provider: block.BlockstoreTypeS3}
+	params, err := storage.BlockstoreS3Params()
+	if err != nil {
+		return service, ""
+	}
+	implicitEndpoint := params.Endpoint == "" && !r.ignoreSDKEndpoints && (r.sdkEndpointAmbiguity || params.Profile != "" || params.CredentialsFile != "")
+	if implicitEndpoint {
+		return service, ""
+	}
+	service.service = s3ServiceIdentity(params.Endpoint, params.Region)
+	service.routes = s3OwnershipRoutes(params.Endpoint, service.service)
+	if params.PreSignedEndpoint == "" {
+		return service, ""
+	}
+	publicService := s3ServiceIdentity(params.PreSignedEndpoint, params.Region)
+	if publicService == "" {
+		service.service = ""
+	} else if service.service != "" {
+		service.routes = append(service.routes, s3OwnershipRoutes(params.PreSignedEndpoint, publicService)...)
+		return service, publicService
+	}
+	return service, ""
+}
+
+func azurePhysicalService(storage config.AdapterConfig) physicalService {
+	service := physicalService{provider: block.BlockstoreTypeAzure}
+	params, err := storage.BlockstoreAzureParams()
+	if err != nil {
+		return service
+	}
+	service.service = strings.ToLower(params.Domain)
+	if service.service == "" {
+		service.service = "blob.core.windows.net"
+	}
+	if params.TestEndpointURL != "" {
+		service.service = normalizedServiceEndpoint(params.TestEndpointURL)
+	}
+	if service.service != "" {
+		service.routes = []string{service.service}
+	}
+	return service
 }
 
 // A configured presigning endpoint names the same objects through another service URL.

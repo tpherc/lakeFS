@@ -1,15 +1,17 @@
 import React, { useContext } from 'react';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const themeScript = readFileSync('pub/theme.js', 'utf8');
+const themeScriptPath = resolve('pub/theme.js');
+const themeScript = readFileSync(themeScriptPath, 'utf8');
 const indexHtml = readFileSync('index.html', 'utf8');
 
 const bootstrapTheme = () => {
-    runInNewContext(themeScript, { window, document });
+    runInNewContext(themeScript, { window, document }, { filename: themeScriptPath });
 };
 
 const renderThemeToggle = async () => {

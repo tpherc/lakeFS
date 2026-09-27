@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/treeverse/lakefs/pkg/auth/model"
 	"github.com/treeverse/lakefs/pkg/auth/oidc/principaltags"
@@ -285,13 +286,9 @@ func TestPolicyVariablesConcurrentPreparedRequests(t *testing.T) {
 				for _, target := range []string{team, "other-team"} {
 					node := policyVariableReadNode(target+"/doc", map[string]string{"team": target})
 					expected := target == team
-					if prepared.CanAuthorize(node) != expected {
-						t.Errorf("candidate leaked between teams %s and %s", team, target)
-					}
+					assert.Equal(t, expected, prepared.CanAuthorize(node), "candidate leaked between teams %s and %s", team, target)
 					response, err := prepared.Authorize(ctx, &AuthorizationRequest{Username: "alice", RequiredPermissions: node})
-					if err != nil || response == nil || response.Allowed != expected {
-						t.Errorf("team %s target %s: response=%v, error=%v", team, target, response, err)
-					}
+					assert.False(t, err != nil || response == nil || response.Allowed != expected, "team %s target %s: response=%v, error=%v", team, target, response, err)
 				}
 			}
 		})
@@ -371,32 +368,42 @@ func BenchmarkPolicyVariablesPreparedListing(b *testing.B) {
 		resources[i] = permissions.RepoArn(fmt.Sprintf("research-%d", i))
 	}
 	b.Run("prepared", func(b *testing.B) {
-		checker, err := PreparePermissionChecker("alice", policies, ctx)
-		if err != nil {
-			b.Fatal(err)
-		}
-		b.ReportAllocs()
-		b.ResetTimer()
-		for b.Loop() {
-			for _, resource := range resources {
-				allowed, err := checker.Check(resource, permissions.ListRepositoriesAction)
-				if err != nil || !allowed {
-					b.Fatalf("check failed: allowed=%v, error=%v", allowed, err)
-				}
-			}
-		}
+		benchmarkPreparedPolicyListing(b, policies, ctx, resources)
 	})
 	b.Run("prepare_per_entry", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			for _, resource := range resources {
-				allowed, err := CheckPermission(resource, "alice", policies, permissions.ListRepositoriesAction, ctx)
-				if err != nil || !allowed {
-					b.Fatalf("check failed: allowed=%v, error=%v", allowed, err)
-				}
+		benchmarkPolicyListingPerEntry(b, policies, ctx, resources)
+	})
+}
+
+func benchmarkPolicyListingPerEntry(b *testing.B, policies []*model.Policy, ctx *ConditionContext, resources []string) {
+	b.Helper()
+	b.ReportAllocs()
+	for b.Loop() {
+		for _, resource := range resources {
+			allowed, err := CheckPermission(resource, "alice", policies, permissions.ListRepositoriesAction, ctx)
+			if err != nil || !allowed {
+				b.Fatalf("check failed: allowed=%v, error=%v", allowed, err)
 			}
 		}
-	})
+	}
+}
+
+func benchmarkPreparedPolicyListing(b *testing.B, policies []*model.Policy, ctx *ConditionContext, resources []string) {
+	b.Helper()
+	checker, err := PreparePermissionChecker("alice", policies, ctx)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		for _, resource := range resources {
+			allowed, err := checker.Check(resource, permissions.ListRepositoriesAction)
+			if err != nil || !allowed {
+				b.Fatalf("check failed: allowed=%v, error=%v", allowed, err)
+			}
+		}
+	}
 }
 
 func TestPolicyVariablesMissingNegatedDenyDoesNotMatch(t *testing.T) {

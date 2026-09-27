@@ -845,7 +845,7 @@ export const uploadWithProgress = (url, file, method = 'POST', onProgress = null
         xhr.setRequestHeader('Accept', 'application/json');
         xhr.setRequestHeader('X-Lakefs-Client', 'lakefs-webui/__buildVersion');
         if (additionalHeaders) {
-            Object.keys(additionalHeaders).map((key) => xhr.setRequestHeader(key, additionalHeaders[key]));
+            Object.keys(additionalHeaders).forEach((key) => xhr.setRequestHeader(key, additionalHeaders[key]));
         }
         if (url.startsWith(API_ENDPOINT)) {
             // swagger API requires a form with a "content" field
@@ -1470,12 +1470,12 @@ class Import {
         return response.json();
     }
 
-    async create(repoId, branchId, source, prepend, commitMessage, commitMetadata = {}, storageID) {
+    async create(repoId, branchId, { source, destination, commitMessage, metadata = {}, storageID }) {
         const body = {
             paths: [
                 {
                     path: source,
-                    destination: prepend,
+                    destination,
                     type: 'common_prefix',
                     storage_id: storageID,
                 },
@@ -1484,8 +1484,8 @@ class Import {
                 message: commitMessage,
             },
         };
-        if (Object.keys(commitMetadata).length > 0) {
-            body.commit['metadata'] = commitMetadata;
+        if (Object.keys(metadata).length > 0) {
+            body.commit['metadata'] = metadata;
         }
 
         const response = await apiRequest(

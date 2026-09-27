@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"github.com/treeverse/lakefs/pkg/auth/oidc/principaltags"
 	"github.com/treeverse/lakefs/pkg/auth/policytemplate"
 )
@@ -187,17 +188,14 @@ func TestResolveErrorsOutrankMissing(t *testing.T) {
 				template := compileTemplate(t, source)
 				lookup := tagLookup(map[string]string{"present": tt.value})
 				got, resolved, err := template.Resolve(lookup)
-				if got != "" || resolved || !errors.Is(err, tt.err) {
-					t.Fatalf("Resolve() = %q, %v, %v; want empty, false, %v", got, resolved, err, tt.err)
-				}
-				if strings.Contains(err.Error(), tt.value) {
-					t.Fatal("error exposes a private attribute value")
-				}
+				require.Empty(t, got)
+				require.False(t, resolved)
+				require.ErrorIs(t, err, tt.err)
+				require.NotContains(t, err.Error(), tt.value, "error exposes a private attribute value")
 				for _, match := range []func(string, policytemplate.Lookup) (policytemplate.MatchResult, error){template.MatchExact, template.MatchLike} {
 					result, err := match("anything", lookup)
-					if result != policytemplate.NoMatch || !errors.Is(err, tt.err) {
-						t.Fatalf("match = %v, %v; want NoMatch, %v", result, err, tt.err)
-					}
+					require.Equal(t, policytemplate.NoMatch, result)
+					require.ErrorIs(t, err, tt.err)
 				}
 			})
 		}
@@ -255,9 +253,8 @@ func TestDynamicLimits(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			template, err := policytemplate.Compile(tt.source)
-			if template != nil || !errors.Is(err, policytemplate.ErrLimitExceeded) {
-				t.Fatalf("Compile() = %v, %v; want nil, ErrLimitExceeded", template, err)
-			}
+			require.Nil(t, template)
+			require.ErrorIs(t, err, policytemplate.ErrLimitExceeded)
 		})
 	}
 	template := compileTemplate(t, "x"+ref+ref)

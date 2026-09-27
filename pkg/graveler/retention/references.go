@@ -14,21 +14,7 @@ import (
 // evaluatedAt fixes retention evaluation independently of scan duration.
 func ForEachRetainedCommit(ctx context.Context, refs GCRefManager, repository *graveler.RepositoryRecord, rules *graveler.GarbageCollectionRules, evaluatedAt time.Time, visit func(graveler.CommitID, graveler.MetaRangeID) error) error {
 	if rules == nil {
-		it, err := refs.ListCommits(ctx, repository)
-		if err != nil {
-			return err
-		}
-		defer it.Close()
-		for it.Next() {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			commit := it.Value()
-			if err := visit(commit.CommitID, commit.MetaRangeID); err != nil {
-				return err
-			}
-		}
-		return it.Err()
+		return forEachKnownCommit(ctx, refs, repository, visit)
 	}
 	branches, err := refs.GCBranchIterator(ctx, repository)
 	if err != nil {
@@ -63,4 +49,22 @@ func ForEachRetainedCommit(ctx context.Context, refs GCRefManager, repository *g
 		}
 	}
 	return nil
+}
+
+func forEachKnownCommit(ctx context.Context, refs GCRefManager, repository *graveler.RepositoryRecord, visit func(graveler.CommitID, graveler.MetaRangeID) error) error {
+	it, err := refs.ListCommits(ctx, repository)
+	if err != nil {
+		return err
+	}
+	defer it.Close()
+	for it.Next() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		commit := it.Value()
+		if err := visit(commit.CommitID, commit.MetaRangeID); err != nil {
+			return err
+		}
+	}
+	return it.Err()
 }

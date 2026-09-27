@@ -72,29 +72,33 @@ func policyVariableGatewayPolicies() []*model.Policy {
 	}}}
 }
 
+type policyVariableGatewayOperation struct {
+	name    string
+	method  string
+	query   string
+	copy    bool
+	handler operations.PathOperationHandler
+}
+
+type policyVariableGatewayCase struct {
+	name           string
+	clearance      string
+	classification string
+	path           string
+	status         int
+	lookups        int
+}
+
 func TestPolicyVariablesGatewayObjectPaths(t *testing.T) {
 	t.Parallel()
-	for _, operation := range []struct {
-		name    string
-		method  string
-		query   string
-		copy    bool
-		handler operations.PathOperationHandler
-	}{
+	for _, operation := range []policyVariableGatewayOperation{
 		{"get", http.MethodGet, "", false, &operations.GetObject{}},
 		{"head", http.MethodHead, "", false, &operations.HeadObject{}},
 		{"copy", http.MethodPut, "", true, &operations.PutObject{}},
 		{"multipart copy", http.MethodPut, "?uploadId=upload&partNumber=1", true, &operations.PutObject{}},
 	} {
 		t.Run(operation.name, func(t *testing.T) {
-			for _, test := range []struct {
-				name           string
-				clearance      string
-				classification string
-				path           string
-				status         int
-				lookups        int
-			}{
+			for _, test := range []policyVariableGatewayCase{
 				{"allowed", "S", "S", "S/file", http.StatusOK, 1},
 				{"metadata mismatch", "S", "TS", "S/file", http.StatusForbidden, 1},
 				{"wrong tag", "U", "S", "S/file", http.StatusForbidden, 0},
@@ -102,50 +106,55 @@ func TestPolicyVariablesGatewayObjectPaths(t *testing.T) {
 				{"wrong path", "S", "S", "U/file", http.StatusForbidden, 0},
 			} {
 				t.Run(test.name, func(t *testing.T) {
-					fixture := &policyVariableGatewayFixture{
-						store: &objectMetadataStore{t: t, entry: metadataGatewayEntry(test.classification)}, blocks: &objectMetadataBlocks{},
-						service: &policyVariableGatewayAuth{objectMetadataAuth: &objectMetadataAuth{t: t, policies: policyVariableGatewayPolicies()}},
-					}
-					destinationPath := test.path
-					if operation.copy {
-						destinationPath = "S/copied"
-					}
-					request := httptest.NewRequest(operation.method, "/destination/main/"+destinationPath+operation.query, nil)
-					if operation.copy {
-						request.Header.Set(operations.CopySourceHeader, "/source/release/"+test.path)
-					}
-					request.Header.Set("X-Amz-Meta-Dcs:Cls", "S")
-					request.Header.Set("X-Amz-Metadata-Directive", "REPLACE")
-					tags := principaltags.Tags{}
-					if test.clearance != "" {
-						tags["clr"] = test.clearance
-					}
-					recorder := fixture.serve(t, request, operation.handler, destinationPath, tags)
-					require.Equal(t, test.status, recorder.Code, recorder.Body.String())
-					require.Equal(t, 1, fixture.service.policyReads)
-					require.Len(t, fixture.store.reads, test.lookups)
-					require.Equal(t, test.lookups != 0, fixture.service.called, "impossible grants must reject before final authorization")
-					if test.status != http.StatusOK {
-						require.Empty(t, fixture.blocks.reads)
-						require.Nil(t, fixture.store.written)
-						require.NotContains(t, recorder.Body.String(), "authorized bytes")
-						return
-					}
-					expected := gatewaypath.ResolvedAbsolutePath{Repo: "destination", Reference: "main", Path: test.path}
-					if operation.copy {
-						expected.Repo, expected.Reference = "source", "release"
-					}
-					require.Equal(t, []gatewaypath.ResolvedAbsolutePath{expected}, fixture.store.reads)
-					if operation.method == http.MethodHead {
-						require.Empty(t, fixture.blocks.reads)
-						require.Equal(t, []string{`"checksum-S"`}, recorder.Header()["ETag"])
-					} else {
-						require.Len(t, fixture.blocks.reads, 1)
-						require.Equal(t, "authorized-S", fixture.blocks.reads[0].Identifier)
-					}
+					testPolicyVariableGatewayObjectPath(t, operation, test)
 				})
 			}
 		})
+	}
+}
+
+func testPolicyVariableGatewayObjectPath(t *testing.T, operation policyVariableGatewayOperation, test policyVariableGatewayCase) {
+	t.Helper()
+	fixture := &policyVariableGatewayFixture{
+		store: &objectMetadataStore{t: t, entry: metadataGatewayEntry(test.classification)}, blocks: &objectMetadataBlocks{},
+		service: &policyVariableGatewayAuth{objectMetadataAuth: &objectMetadataAuth{t: t, policies: policyVariableGatewayPolicies()}},
+	}
+	destinationPath := test.path
+	if operation.copy {
+		destinationPath = "S/copied"
+	}
+	request := httptest.NewRequest(operation.method, "/destination/main/"+destinationPath+operation.query, nil)
+	if operation.copy {
+		request.Header.Set(operations.CopySourceHeader, "/source/release/"+test.path)
+	}
+	request.Header.Set("X-Amz-Meta-Dcs:Cls", "S")
+	request.Header.Set("X-Amz-Metadata-Directive", "REPLACE")
+	tags := principaltags.Tags{}
+	if test.clearance != "" {
+		tags["clr"] = test.clearance
+	}
+	recorder := fixture.serve(t, request, operation.handler, destinationPath, tags)
+	require.Equal(t, test.status, recorder.Code, recorder.Body.String())
+	require.Equal(t, 1, fixture.service.policyReads)
+	require.Len(t, fixture.store.reads, test.lookups)
+	require.Equal(t, test.lookups != 0, fixture.service.called, "impossible grants must reject before final authorization")
+	if test.status != http.StatusOK {
+		require.Empty(t, fixture.blocks.reads)
+		require.Nil(t, fixture.store.written)
+		require.NotContains(t, recorder.Body.String(), "authorized bytes")
+		return
+	}
+	expected := gatewaypath.ResolvedAbsolutePath{Repo: "destination", Reference: "main", Path: test.path}
+	if operation.copy {
+		expected.Repo, expected.Reference = "source", "release"
+	}
+	require.Equal(t, []gatewaypath.ResolvedAbsolutePath{expected}, fixture.store.reads)
+	if operation.method == http.MethodHead {
+		require.Empty(t, fixture.blocks.reads)
+		require.Equal(t, []string{`"checksum-S"`}, recorder.Header()["ETag"])
+	} else {
+		require.Len(t, fixture.blocks.reads, 1)
+		require.Equal(t, "authorized-S", fixture.blocks.reads[0].Identifier)
 	}
 }
 

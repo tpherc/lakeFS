@@ -109,27 +109,32 @@ func TestForEachRetainedCommitPolicyReadFailures(t *testing.T) {
 	t.Parallel()
 	for _, failure := range []string{"commits", "branches", "dangling", "missing parent", "visitor"} {
 		t.Run(failure, func(t *testing.T) {
-			refs := &referencesTestRefs{failure: failure}
-			if failure == "missing parent" || failure == "visitor" {
-				head := &graveler.CommitRecord{CommitID: "head", Commit: &graveler.Commit{CreationDate: time.Now(), MetaRangeID: "mr-head"}}
-				if failure == "missing parent" {
-					head.Parents = []graveler.CommitID{"missing"}
-				}
-				refs.commits = []*graveler.CommitRecord{head}
-				refs.branches = []*graveler.BranchRecord{{BranchID: "main", Branch: &graveler.Branch{CommitID: "head"}}}
-			}
-			err := ForEachRetainedCommit(t.Context(), refs, &graveler.RepositoryRecord{}, &graveler.GarbageCollectionRules{DefaultRetentionDays: 1}, time.Now(), func(graveler.CommitID, graveler.MetaRangeID) error {
-				if failure == "visitor" {
-					return errReferencesTest
-				}
-				return nil
-			})
-			if failure == "missing parent" {
-				require.ErrorIs(t, err, graveler.ErrNotFound)
-			} else {
-				require.ErrorIs(t, err, errReferencesTest)
-			}
+			testRetainedCommitPolicyReadFailure(t, failure)
 		})
+	}
+}
+
+func testRetainedCommitPolicyReadFailure(t *testing.T, failure string) {
+	t.Helper()
+	refs := &referencesTestRefs{failure: failure}
+	if failure == "missing parent" || failure == "visitor" {
+		head := &graveler.CommitRecord{CommitID: "head", Commit: &graveler.Commit{CreationDate: time.Now(), MetaRangeID: "mr-head"}}
+		if failure == "missing parent" {
+			head.Parents = []graveler.CommitID{"missing"}
+		}
+		refs.commits = []*graveler.CommitRecord{head}
+		refs.branches = []*graveler.BranchRecord{{BranchID: "main", Branch: &graveler.Branch{CommitID: "head"}}}
+	}
+	err := ForEachRetainedCommit(t.Context(), refs, &graveler.RepositoryRecord{}, &graveler.GarbageCollectionRules{DefaultRetentionDays: 1}, time.Now(), func(graveler.CommitID, graveler.MetaRangeID) error {
+		if failure == "visitor" {
+			return errReferencesTest
+		}
+		return nil
+	})
+	if failure == "missing parent" {
+		require.ErrorIs(t, err, graveler.ErrNotFound)
+	} else {
+		require.ErrorIs(t, err, errReferencesTest)
 	}
 }
 

@@ -89,7 +89,7 @@ func TestCopyEntryFromSnapshot(t *testing.T) {
 			store.latest, err = EntryToValue(newEntryFromCatalogEntry(latest))
 			require.NoError(t, err)
 
-			result, err := catalog.CopyEntryFromSnapshot(t.Context(), "repo", "main", snapshot, "repo", "main", "copy", tt.replace, tt.replacement, func(options *graveler.SetOptions) { options.Shallow = tt.shallow })
+			result, err := catalog.CopyEntryFromSnapshot(t.Context(), "repo", "main", snapshot, CopyEntryParams{DestinationRepository: "repo", DestinationBranch: "main", DestinationPath: "copy", ReplaceMetadata: tt.replace, Metadata: tt.replacement}, func(options *graveler.SetOptions) { options.Shallow = tt.shallow })
 			require.NoError(t, err)
 			require.Zero(t, store.getCalls, "must not resolve a newer source entry after authorization")
 			require.Equal(t, original, *snapshot, "the authorized snapshot must remain immutable")
@@ -152,7 +152,7 @@ func TestCopyEntryFromSnapshotPreservesCopyRestrictions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			catalog, store, adapter := newSnapshotCopyCatalog()
 			store.repositories["other"] = &graveler.RepositoryRecord{RepositoryID: "other", Repository: &graveler.Repository{StorageID: tt.storageID, StorageNamespace: "s3://other"}}
-			_, err := catalog.CopyEntryFromSnapshot(t.Context(), "repo", "main", &DBEntry{Path: "source"}, tt.destination, tt.branch, "copy", false, nil, func(options *graveler.SetOptions) { options.Shallow = tt.shallow })
+			_, err := catalog.CopyEntryFromSnapshot(t.Context(), "repo", "main", &DBEntry{Path: "source"}, CopyEntryParams{DestinationRepository: tt.destination, DestinationBranch: tt.branch, DestinationPath: "copy", ReplaceMetadata: false, Metadata: nil}, func(options *graveler.SetOptions) { options.Shallow = tt.shallow })
 			require.True(t, errors.Is(err, tt.expectedError), "got %v", err)
 			require.Zero(t, adapter.copyCalls)
 			require.Nil(t, store.written)

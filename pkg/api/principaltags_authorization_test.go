@@ -33,21 +33,23 @@ import (
 
 // These tests start with an authenticated principal snapshot and exercise each
 // enforcement entry point, including real catalog filtering for REST and S3.
+type principalTagsAuthorizationCase struct {
+	name        string
+	tags        principaltags.Tags
+	effect      string
+	condition   map[string]map[string][]string
+	broadAllow  bool
+	allowed     bool
+	filterError bool
+}
+
 func TestPrincipalTagsAuthorizationPaths(t *testing.T) {
 	t.Parallel()
 	condition := func(operator, field, value string) map[string]map[string][]string {
 		return map[string]map[string][]string{operator: {field: {value}}}
 	}
 	tagCondition := condition("StringLike", "AWS:PrincipalTag/CLR", "S")
-	for _, tc := range []struct {
-		name        string
-		tags        principaltags.Tags
-		effect      string
-		condition   map[string]map[string][]string
-		broadAllow  bool
-		allowed     bool
-		filterError bool
-	}{
+	for _, tc := range []principalTagsAuthorizationCase{
 		{name: "tag conditioned allow", tags: principaltags.Tags{"clr": "S"}, effect: model.StatementEffectAllow, condition: tagCondition, allowed: true},
 		{name: "tag conditioned deny", tags: principaltags.Tags{"clr": "S"}, effect: model.StatementEffectDeny, condition: tagCondition},
 		{name: "broad allow and tag deny", tags: principaltags.Tags{"clr": "S"}, effect: model.StatementEffectDeny, condition: tagCondition, broadAllow: true},
@@ -73,91 +75,16 @@ func TestPrincipalTagsAuthorizationPaths(t *testing.T) {
 			}}
 
 			t.Run("API auth", func(t *testing.T) {
-				mockClient := authmock.NewMockClientWithResponsesInterface(gomock.NewController(t))
-				// Serialize through the actual API shape, preserving conditions.
-				encoded, err := json.Marshal(statements)
-				require.NoError(t, err)
-				var apiStatements []auth.Statement
-				require.NoError(t, json.Unmarshal(encoded, &apiStatements))
-				mockClient.EXPECT().ListUserPoliciesWithResponse(gomock.Any(), "user", gomock.Any()).Return(&auth.ListUserPoliciesResponse{
-					HTTPResponse: &http.Response{StatusCode: http.StatusOK},
-					JSON200:      &auth.PolicyList{Results: []auth.Policy{{Name: "tags", Statement: apiStatements}}},
-				}, nil)
-				service, err := auth.NewAPIAuthServiceWithClient(mockClient, true, true, crypt.NewSecretStore([]byte("test-secret")), authparams.ServiceCache{}, logging.Dummy())
-				require.NoError(t, err)
-				response, err := service.Authorize(ctx, request)
-				require.NoError(t, err)
-				require.Equal(t, tc.allowed, response.Allowed)
-				if !tc.allowed {
-					require.ErrorIs(t, response.Error, auth.ErrInsufficientPermissions)
-				}
+				testPrincipalTagsAPIAuth(t, statements, ctx, request, tc.allowed)
 			})
 
 			t.Run("local ACL", func(t *testing.T) {
-				store := kvtest.GetStore(ctx, t)
-				service := authacl.NewAuthService(store, crypt.NewSecretStore([]byte("test-secret")), authparams.ServiceCache{}, true)
-				_, err := service.CreateUser(ctx, &model.User{Username: "user"})
-				require.NoError(t, err)
-				err = service.WritePolicy(ctx, policies[0], false)
-				if _, unsupported := tc.condition["Unsupported"]; unsupported {
-					require.ErrorIs(t, err, model.ErrValidationError)
-					// Imported/previously stored policies still need runtime validation.
-					require.NoError(t, kv.SetMsg(ctx, store, model.PartitionKey, model.PolicyPath(policies[0].DisplayName), model.ProtoFromPolicy(policies[0])))
-				} else {
-					require.NoError(t, err)
-				}
-				require.NoError(t, service.AttachPolicyToUser(ctx, policies[0].DisplayName, "user"))
-				response, err := service.Authorize(ctx, request)
-				require.NoError(t, err)
-				require.Equal(t, tc.allowed, response.Allowed)
-				if !tc.allowed {
-					require.ErrorIs(t, response.Error, auth.ErrInsufficientPermissions)
-				}
+				testPrincipalTagsLocalACL(t, tc, policies, ctx, request)
 			})
 
 			for _, path := range []string{"REST", "S3"} {
 				t.Run(path, func(t *testing.T) {
-					hasAllow := tc.effect == model.StatementEffectAllow || tc.broadAllow
-					catalog := repositoryListingCatalog(t, hasAllow, tc.filterError)
-					service := &repositoryListingAuth{policies: policies}
-					recorder := httptest.NewRecorder()
-					req := httptest.NewRequest(http.MethodGet, "http://lakefs.example/", nil).WithContext(ctx)
-					req.RemoteAddr = "192.0.2.42:54321"
-					if path == "REST" {
-						controller := &api.Controller{Catalog: catalog, Auth: service, Logger: logging.Dummy(), Collector: &stats.NullCollector{}}
-						controller.ListRepositories(recorder, req, apigen.ListRepositoriesParams{})
-					} else {
-						operation := &operations.AuthorizedOperation{Operation: &operations.Operation{Catalog: catalog, Auth: service, Incr: func(string, string, string, string) {}}, Principal: "user"}
-						(&operations.ListBuckets{}).Handle(recorder, req, operation)
-					}
-					if tc.filterError {
-						require.Equal(t, http.StatusInternalServerError, recorder.Code)
-						return
-					}
-					if !hasAllow {
-						require.Contains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, recorder.Code)
-						return
-					}
-					require.Equal(t, http.StatusOK, recorder.Code)
-					var names []string
-					if path == "REST" {
-						var result apigen.RepositoryList
-						require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &result))
-						for _, repo := range result.Results {
-							names = append(names, repo.Id)
-						}
-					} else {
-						var result serde.ListAllMyBucketsResult
-						require.NoError(t, xml.Unmarshal(recorder.Body.Bytes(), &result))
-						for _, bucket := range result.Buckets.Bucket {
-							names = append(names, bucket.Name)
-						}
-					}
-					if tc.allowed {
-						require.Equal(t, []string{"example"}, names)
-					} else {
-						require.Empty(t, names)
-					}
+					testPrincipalTagsRepositoryListing(t, path, tc, policies, ctx)
 				})
 			}
 		})
@@ -167,6 +94,96 @@ func TestPrincipalTagsAuthorizationPaths(t *testing.T) {
 type repositoryListingAuth struct {
 	auth.Service
 	policies []*model.Policy
+}
+
+func testPrincipalTagsRepositoryListing(t *testing.T, path string, tc principalTagsAuthorizationCase, policies []*model.Policy, ctx context.Context) {
+	t.Helper()
+	hasAllow := tc.effect == model.StatementEffectAllow || tc.broadAllow
+	catalog := repositoryListingCatalog(t, hasAllow, tc.filterError)
+	service := &repositoryListingAuth{policies: policies}
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "http://lakefs.example/", nil).WithContext(ctx)
+	req.RemoteAddr = "192.0.2.42:54321"
+	if path == "REST" {
+		controller := &api.Controller{Catalog: catalog, Auth: service, Logger: logging.Dummy(), Collector: &stats.NullCollector{}}
+		controller.ListRepositories(recorder, req, apigen.ListRepositoriesParams{})
+	} else {
+		operation := &operations.AuthorizedOperation{Operation: &operations.Operation{Catalog: catalog, Auth: service, Incr: func(string, string, string, string) {}}, Principal: "user"}
+		(&operations.ListBuckets{}).Handle(recorder, req, operation)
+	}
+	if tc.filterError {
+		require.Equal(t, http.StatusInternalServerError, recorder.Code)
+		return
+	}
+	if !hasAllow {
+		require.Contains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, recorder.Code)
+		return
+	}
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var names []string
+	if path == "REST" {
+		var result apigen.RepositoryList
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &result))
+		for _, repo := range result.Results {
+			names = append(names, repo.Id)
+		}
+	} else {
+		var result serde.ListAllMyBucketsResult
+		require.NoError(t, xml.Unmarshal(recorder.Body.Bytes(), &result))
+		for _, bucket := range result.Buckets.Bucket {
+			names = append(names, bucket.Name)
+		}
+	}
+	if tc.allowed {
+		require.Equal(t, []string{"example"}, names)
+	} else {
+		require.Empty(t, names)
+	}
+}
+
+func testPrincipalTagsLocalACL(t *testing.T, tc principalTagsAuthorizationCase, policies []*model.Policy, ctx context.Context, request *auth.AuthorizationRequest) {
+	t.Helper()
+	store := kvtest.GetStore(ctx, t)
+	service := authacl.NewAuthService(store, crypt.NewSecretStore([]byte("test-secret")), authparams.ServiceCache{}, true)
+	_, err := service.CreateUser(ctx, &model.User{Username: "user"})
+	require.NoError(t, err)
+	err = service.WritePolicy(ctx, policies[0], false)
+	if _, unsupported := tc.condition["Unsupported"]; unsupported {
+		require.ErrorIs(t, err, model.ErrValidationError)
+		// Imported/previously stored policies still need runtime validation.
+		require.NoError(t, kv.SetMsg(ctx, store, model.PartitionKey, model.PolicyPath(policies[0].DisplayName), model.ProtoFromPolicy(policies[0])))
+	} else {
+		require.NoError(t, err)
+	}
+	require.NoError(t, service.AttachPolicyToUser(ctx, policies[0].DisplayName, "user"))
+	response, err := service.Authorize(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, tc.allowed, response.Allowed)
+	if !tc.allowed {
+		require.ErrorIs(t, response.Error, auth.ErrInsufficientPermissions)
+	}
+}
+
+func testPrincipalTagsAPIAuth(t *testing.T, statements model.Statements, ctx context.Context, request *auth.AuthorizationRequest, allowed bool) {
+	t.Helper()
+	mockClient := authmock.NewMockClientWithResponsesInterface(gomock.NewController(t))
+	// Serialize through the actual API shape, preserving conditions.
+	encoded, err := json.Marshal(statements)
+	require.NoError(t, err)
+	var apiStatements []auth.Statement
+	require.NoError(t, json.Unmarshal(encoded, &apiStatements))
+	mockClient.EXPECT().ListUserPoliciesWithResponse(gomock.Any(), "user", gomock.Any()).Return(&auth.ListUserPoliciesResponse{
+		HTTPResponse: &http.Response{StatusCode: http.StatusOK},
+		JSON200:      &auth.PolicyList{Results: []auth.Policy{{Name: "tags", Statement: apiStatements}}},
+	}, nil)
+	service, err := auth.NewAPIAuthServiceWithClient(mockClient, true, true, crypt.NewSecretStore([]byte("test-secret")), authparams.ServiceCache{}, logging.Dummy())
+	require.NoError(t, err)
+	response, err := service.Authorize(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, allowed, response.Allowed)
+	if !allowed {
+		require.ErrorIs(t, response.Error, auth.ErrInsufficientPermissions)
+	}
 }
 
 func (s *repositoryListingAuth) ListEffectivePolicies(context.Context, string, *model.PaginationParams) ([]*model.Policy, *model.Paginator, error) {

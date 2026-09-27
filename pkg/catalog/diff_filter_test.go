@@ -81,7 +81,7 @@ func listFilteredDiff(ctx context.Context, c *catalog.Catalog, mode string, para
 	case "three-dot":
 		return c.Compare(ctx, "repo", "left", "right", params, opts...)
 	default:
-		return c.DiffUncommitted(ctx, "repo", "main", params.Prefix, params.Delimiter, params.Limit, params.After, opts...)
+		return c.DiffUncommitted(ctx, "repo", "main", catalog.DiffParams{Prefix: params.Prefix, Delimiter: params.Delimiter, Limit: params.Limit, After: params.After}, opts...)
 	}
 }
 
@@ -183,51 +183,56 @@ func TestCatalogDiffFilterFailures(t *testing.T) {
 	for _, mode := range []string{"two-dot", "three-dot", "uncommitted"} {
 		for _, source := range []string{"filter", "iterator", "legacy decode", "left decode", "base decode", "cancel allow", "cancel deny"} {
 			t.Run(mode+"/"+source, func(t *testing.T) {
-				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
-				records := diffRecords(map[string]string{"a": "U", "b": "U"})
-				iter := &filteredDiffIterator{diffs: records}
-				if source == "iterator" {
-					iter.failure = failure
-					iter.failAt = 1
-				}
-				corrupt := &graveler.Value{Data: []byte{0xff}}
-				switch source {
-				case "legacy decode":
-					records[1].Value = corrupt
-				case "left decode":
-					records[1].LeftValue = corrupt
-				case "base decode":
-					records[1].BaseValue = corrupt
-				}
-				diffs, more, err := listFilteredDiff(ctx, diffCatalog(iter), mode, catalog.DiffParams{Limit: 1}, catalog.WithDiffFilter(func(diff *catalog.EntryDiff) (bool, error) {
-					if diff.Path == "b" {
-						switch source {
-						case "filter":
-							return false, failure
-						case "cancel allow":
-							cancel()
-							return true, nil
-						case "cancel deny":
-							cancel()
-							return false, nil
-						}
-					}
-					return true, nil
-				}))
-				require.Error(t, err)
-				if source == "filter" || source == "iterator" {
-					require.ErrorIs(t, err, failure)
-				}
-				if strings.HasPrefix(source, "cancel") {
-					require.ErrorIs(t, err, context.Canceled)
-				}
-				require.Nil(t, diffs)
-				require.False(t, more)
-				require.Equal(t, 1, iter.closes)
+				testCatalogDiffFilterFailure(t, mode, source, failure)
 			})
 		}
 	}
+}
+
+func testCatalogDiffFilterFailure(t *testing.T, mode, source string, failure error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	records := diffRecords(map[string]string{"a": "U", "b": "U"})
+	iter := &filteredDiffIterator{diffs: records}
+	if source == "iterator" {
+		iter.failure = failure
+		iter.failAt = 1
+	}
+	corrupt := &graveler.Value{Data: []byte{0xff}}
+	switch source {
+	case "legacy decode":
+		records[1].Value = corrupt
+	case "left decode":
+		records[1].LeftValue = corrupt
+	case "base decode":
+		records[1].BaseValue = corrupt
+	}
+	diffs, more, err := listFilteredDiff(ctx, diffCatalog(iter), mode, catalog.DiffParams{Limit: 1}, catalog.WithDiffFilter(func(diff *catalog.EntryDiff) (bool, error) {
+		if diff.Path == "b" {
+			switch source {
+			case "filter":
+				return false, failure
+			case "cancel allow":
+				cancel()
+				return true, nil
+			case "cancel deny":
+				cancel()
+				return false, nil
+			}
+		}
+		return true, nil
+	}))
+	require.Error(t, err)
+	if source == "filter" || source == "iterator" {
+		require.ErrorIs(t, err, failure)
+	}
+	if strings.HasPrefix(source, "cancel") {
+		require.ErrorIs(t, err, context.Canceled)
+	}
+	require.Nil(t, diffs)
+	require.False(t, more)
+	require.Equal(t, 1, iter.closes)
 }
 
 func TestCatalogDiffWithoutFilterPreservesLegacySideDecoding(t *testing.T) {
@@ -345,46 +350,51 @@ func TestCatalogDiffCompactedUncommittedFilteringAndDirectories(t *testing.T) {
 		{},
 	} {
 		t.Run(fmt.Sprint(len(stagedClasses))+" staged", func(t *testing.T) {
-			test := gtest.InitGravelerTest(t)
-			repo := &graveler.RepositoryRecord{RepositoryID: "repo", Repository: &graveler.Repository{StorageNamespace: "mem://repo"}}
-			branch := &graveler.Branch{CommitID: "commit", StagingToken: "staging", CompactedBaseMetaRangeID: "compacted"}
-			test.RefManager.EXPECT().GetRepository(gomock.Any(), graveler.RepositoryID("repo")).Return(repo, nil).AnyTimes()
-			test.RefManager.EXPECT().GetBranch(gomock.Any(), repo, graveler.BranchID("main")).Return(branch, nil).AnyTimes()
-			test.RefManager.EXPECT().GetCommit(gomock.Any(), repo, graveler.CommitID("commit")).Return(&graveler.Commit{MetaRangeID: "base"}, nil).AnyTimes()
-			test.StagingManager.EXPECT().List(gomock.Any(), graveler.StagingToken("staging"), 0).DoAndReturn(func(context.Context, graveler.StagingToken, int) graveler.ValueIterator {
-				return catalog.NewFakeValueIterator(listingRecords(stagedClasses))
-			}).AnyTimes()
-			test.CommittedManager.EXPECT().List(gomock.Any(), repo.StorageID, repo.StorageNamespace, graveler.MetaRangeID("base")).DoAndReturn(func(context.Context, graveler.StorageID, graveler.StorageNamespace, graveler.MetaRangeID) (graveler.ValueIterator, error) {
-				return catalog.NewFakeValueIterator(nil), nil
-			}).AnyTimes()
-			test.CommittedManager.EXPECT().Diff(gomock.Any(), repo.StorageID, repo.StorageNamespace, graveler.MetaRangeID("base"), graveler.MetaRangeID("compacted")).DoAndReturn(func(context.Context, graveler.StorageID, graveler.StorageNamespace, graveler.MetaRangeID, graveler.MetaRangeID) (graveler.DiffIterator, error) {
-				return &filteredDiffIterator{diffs: diffRecords(map[string]string{"a-dir/b-compacted": "U", "b-hidden/file": "TS", "c-dir/compacted": "U", "z-last": "U"})}, nil
-			}).AnyTimes()
-			c := &catalog.Catalog{Store: test.Sut}
-			filter := catalog.WithDiffPermissionFilter(t.Context(), diffAuthorizerFunc(func(ctx context.Context, req *auth.AuthorizationRequest) (*auth.AuthorizationResponse, error) {
-				for _, node := range req.RequiredPermissions.Nodes {
-					if node.Permission.ObjectMetadata["dcs:cls"] != "U" {
-						return &auth.AuthorizationResponse{Allowed: false}, nil
-					}
-				}
-				return &auth.AuthorizationResponse{Allowed: true}, nil
-			}), "alice", "repo", "")
-			var got []string
-			after := ""
-			for {
-				diffs, more, err := c.DiffUncommitted(t.Context(), "repo", "main", "", "/", 1, after, filter)
-				require.NoError(t, err)
-				require.Len(t, diffs, 1)
-				got = append(got, diffPaths(diffs)...)
-				if !more {
-					break
-				}
-				after = diffs[0].Path
-				require.Less(t, len(got), 4, "pagination must advance")
-			}
-			require.Equal(t, []string{"a-dir/", "c-dir/", "z-last"}, got)
+			testCatalogCompactedDiffFiltering(t, stagedClasses)
 		})
 	}
+}
+
+func testCatalogCompactedDiffFiltering(t *testing.T, stagedClasses map[string]string) {
+	t.Helper()
+	test := gtest.InitGravelerTest(t)
+	repo := &graveler.RepositoryRecord{RepositoryID: "repo", Repository: &graveler.Repository{StorageNamespace: "mem://repo"}}
+	branch := &graveler.Branch{CommitID: "commit", StagingToken: "staging", CompactedBaseMetaRangeID: "compacted"}
+	test.RefManager.EXPECT().GetRepository(gomock.Any(), graveler.RepositoryID("repo")).Return(repo, nil).AnyTimes()
+	test.RefManager.EXPECT().GetBranch(gomock.Any(), repo, graveler.BranchID("main")).Return(branch, nil).AnyTimes()
+	test.RefManager.EXPECT().GetCommit(gomock.Any(), repo, graveler.CommitID("commit")).Return(&graveler.Commit{MetaRangeID: "base"}, nil).AnyTimes()
+	test.StagingManager.EXPECT().List(gomock.Any(), graveler.StagingToken("staging"), 0).DoAndReturn(func(context.Context, graveler.StagingToken, int) graveler.ValueIterator {
+		return catalog.NewFakeValueIterator(listingRecords(stagedClasses))
+	}).AnyTimes()
+	test.CommittedManager.EXPECT().List(gomock.Any(), repo.StorageID, repo.StorageNamespace, graveler.MetaRangeID("base")).DoAndReturn(func(context.Context, graveler.StorageID, graveler.StorageNamespace, graveler.MetaRangeID) (graveler.ValueIterator, error) {
+		return catalog.NewFakeValueIterator(nil), nil
+	}).AnyTimes()
+	test.CommittedManager.EXPECT().Diff(gomock.Any(), repo.StorageID, repo.StorageNamespace, graveler.MetaRangeID("base"), graveler.MetaRangeID("compacted")).DoAndReturn(func(context.Context, graveler.StorageID, graveler.StorageNamespace, graveler.MetaRangeID, graveler.MetaRangeID) (graveler.DiffIterator, error) {
+		return &filteredDiffIterator{diffs: diffRecords(map[string]string{"a-dir/b-compacted": "U", "b-hidden/file": "TS", "c-dir/compacted": "U", "z-last": "U"})}, nil
+	}).AnyTimes()
+	c := &catalog.Catalog{Store: test.Sut}
+	filter := catalog.WithDiffPermissionFilter(t.Context(), diffAuthorizerFunc(func(ctx context.Context, req *auth.AuthorizationRequest) (*auth.AuthorizationResponse, error) {
+		for _, node := range req.RequiredPermissions.Nodes {
+			if node.Permission.ObjectMetadata["dcs:cls"] != "U" {
+				return &auth.AuthorizationResponse{Allowed: false}, nil
+			}
+		}
+		return &auth.AuthorizationResponse{Allowed: true}, nil
+	}), "alice", "repo", "")
+	var got []string
+	after := ""
+	for {
+		diffs, more, err := c.DiffUncommitted(t.Context(), "repo", "main", catalog.DiffParams{Prefix: "", Delimiter: "/", Limit: 1, After: after}, filter)
+		require.NoError(t, err)
+		require.Len(t, diffs, 1)
+		got = append(got, diffPaths(diffs)...)
+		if !more {
+			break
+		}
+		after = diffs[0].Path
+		require.Less(t, len(got), 4, "pagination must advance")
+	}
+	require.Equal(t, []string{"a-dir/", "c-dir/", "z-last"}, got)
 }
 
 func TestCatalogDiffFilterComparisonEntriesOwnDecodedMetadata(t *testing.T) {

@@ -256,12 +256,8 @@ func getSelectedStorageConfigOrDie(ctx context.Context, client *apigen.ClientWit
 
 	storageConfigList := confResp.JSON200.StorageConfigList
 	if storageID != "" {
-		if storageConfigList != nil {
-			for _, storageConfig := range *storageConfigList {
-				if swag.StringValue(storageConfig.BlockstoreId) == storageID {
-					return &storageConfig
-				}
-			}
+		if storageConfig := findStorageConfig(storageConfigList, storageID); storageConfig != nil {
+			return storageConfig
 		}
 		Die("Storage config not found for source "+storageID, 1)
 	}
@@ -276,15 +272,9 @@ func getSelectedStorageConfigOrDie(ctx context.Context, client *apigen.ClientWit
 			if repoResp.JSON200 == nil {
 				Die("Bad response from server for GetRepository", 1)
 			}
-			storageID := repoResp.JSON200.StorageId
-
-			// find the storage config for the repository
-			for _, storageConfig := range *storageConfigList {
-				if swag.StringValue(storageConfig.BlockstoreId) == swag.StringValue(storageID) {
-					return &storageConfig
-				}
+			if storageConfig := findStorageConfig(storageConfigList, swag.StringValue(repoResp.JSON200.StorageId)); storageConfig != nil {
+				return storageConfig
 			}
-
 			Die("Storage config not found for repo "+repositoryID, 1)
 		}
 	}
@@ -294,6 +284,18 @@ func getSelectedStorageConfigOrDie(ctx context.Context, client *apigen.ClientWit
 		Die("Bad response from server for GetConfig", 1)
 	}
 	return storageConfig
+}
+
+func findStorageConfig(configs *apigen.StorageConfigList, storageID string) *apigen.StorageConfig {
+	if configs == nil {
+		return nil
+	}
+	for _, storageConfig := range *configs {
+		if swag.StringValue(storageConfig.BlockstoreId) == storageID {
+			return &storageConfig
+		}
+	}
+	return nil
 }
 
 type PresignMode struct {

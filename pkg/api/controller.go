@@ -430,35 +430,33 @@ func (c *Controller) UploadPartCopy(w http.ResponseWriter, r *http.Request,
 	if c.handleAPIError(ctx, w, r, err) {
 		return
 	}
-	var etag string
-	if rng := body.CopySource.Range; rng != nil {
-		var startPosition, endPosition int64
-		// Cannot use httputil.ParseRange without knowing the length of the source
-		// object.  Instead we will pass negative counts-from-end unchanged, the
-		// blockstore will handle them.
-
-		// Sscanf is safe for parsing ints.
-		_, err = fmt.Sscanf(*rng, "bytes=%d-%d", &startPosition, &endPosition)
-		if err != nil {
-			c.handleAPIError(ctx, w, r, fmt.Errorf("parse range \"%s\": %w", *rng, err))
-			return
-		}
-		resp, err := c.BlockAdapter.UploadCopyPartRange(ctx, srcObjectRef, dstObjectRef, uploadID, partNumber,
-			startPosition, endPosition)
-		if c.handleAPIError(ctx, w, r, err) {
-			return
-		}
-		etag = resp.ETag
-	} else {
-		resp, err := c.BlockAdapter.UploadCopyPart(ctx, srcObjectRef, dstObjectRef, uploadID, partNumber)
-		if c.handleAPIError(ctx, w, r, err) {
-			return
-		}
-		etag = resp.ETag
+	etag, err := c.uploadCopyPart(ctx, srcObjectRef, dstObjectRef, uploadID, partNumber, body.CopySource.Range)
+	if c.handleAPIError(ctx, w, r, err) {
+		return
 	}
 
 	w.Header().Set("ETag", etag)
 	writeResponse(w, r, http.StatusNoContent, nil)
+}
+
+func (c *Controller) uploadCopyPart(ctx context.Context, source, destination block.ObjectPointer, uploadID string, partNumber int, copyRange *string) (string, error) {
+	if copyRange == nil {
+		response, err := c.BlockAdapter.UploadCopyPart(ctx, source, destination, uploadID, partNumber)
+		if err != nil {
+			return "", err
+		}
+		return response.ETag, nil
+	}
+	// Preserve negative counts-from-end for the blockstore; ParseRange requires the source length.
+	var startPosition, endPosition int64
+	if _, err := fmt.Sscanf(*copyRange, "bytes=%d-%d", &startPosition, &endPosition); err != nil {
+		return "", fmt.Errorf(`parse range "%s": %w`, *copyRange, err)
+	}
+	response, err := c.BlockAdapter.UploadCopyPartRange(ctx, source, destination, uploadID, partNumber, startPosition, endPosition)
+	if err != nil {
+		return "", err
+	}
+	return response.ETag, nil
 }
 
 func (c *Controller) AbortPresignMultipartUpload(w http.ResponseWriter, r *http.Request, body apigen.AbortPresignMultipartUploadJSONRequestBody, repository string, branch string, uploadID string, params apigen.AbortPresignMultipartUploadParams) {
@@ -3494,10 +3492,12 @@ func (c *Controller) DiffBranch(w http.ResponseWriter, r *http.Request, reposito
 		ctx,
 		repository,
 		branch,
-		paginationPrefix(params.Prefix),
-		paginationDelimiter(params.Delimiter),
-		paginationAmount(params.Amount),
-		paginationAfter(params.After),
+		catalog.DiffParams{
+			Prefix:    paginationPrefix(params.Prefix),
+			Delimiter: paginationDelimiter(params.Delimiter),
+			Limit:     paginationAmount(params.Amount),
+			After:     paginationAfter(params.After),
+		},
 		catalog.WithDiffPermissionFilter(ctx, prepared, user.Username, repository, httputil.ExtractClientIP(r.Header, r.RemoteAddr)),
 	)
 	if c.handleAPIError(ctx, w, r, err) {
@@ -3875,7 +3875,7 @@ func (c *Controller) CopyObject(w http.ResponseWriter, r *http.Request, body api
 	}
 
 	// copy entry
-	entry, err := c.Catalog.CopyEntryFromSnapshot(ctx, repository, srcRef, srcEntry, repository, branch, destPath, false, nil, opts...)
+	entry, err := c.Catalog.CopyEntryFromSnapshot(ctx, repository, srcRef, srcEntry, catalog.CopyEntryParams{DestinationRepository: repository, DestinationBranch: branch, DestinationPath: destPath}, opts...)
 	if c.handleAPIError(ctx, w, r, err) {
 		return
 	}
@@ -5098,10 +5098,12 @@ func (c *Controller) ListObjects(w http.ResponseWriter, r *http.Request, reposit
 		ctx,
 		repository,
 		ref,
-		paginationPrefix(params.Prefix),
-		paginationAfter(params.After),
-		paginationDelimiter(params.Delimiter),
-		paginationAmount(params.Amount),
+		catalog.ListEntriesParams{
+			Prefix:    paginationPrefix(params.Prefix),
+			After:     paginationAfter(params.After),
+			Delimiter: paginationDelimiter(params.Delimiter),
+			Limit:     paginationAmount(params.Amount),
+		},
 		catalog.WithListEntriesPermissionFilter(ctx, prepared, user.Username, repository, httputil.ExtractClientIP(r.Header, r.RemoteAddr)),
 	)
 	if c.handleAPIError(ctx, w, r, err) {
@@ -5211,11 +5213,9 @@ func (c *Controller) StatObject(w http.ResponseWriter, r *http.Request, reposito
 	}
 
 	// add metadata if requested
-	var metadata map[string]string
+	metadata := map[string]string{}
 	if (params.UserMetadata == nil || *params.UserMetadata) && entry.Metadata != nil {
 		metadata = entry.Metadata
-	} else {
-		metadata = map[string]string{}
 	}
 	objStat.Metadata = &apigen.ObjectUserMetadata{AdditionalProperties: metadata}
 

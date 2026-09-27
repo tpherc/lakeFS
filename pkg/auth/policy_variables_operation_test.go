@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -73,33 +74,43 @@ func BenchmarkPolicyVariablesReadOperation(b *testing.B) {
 		}
 		b.Run(fmt.Sprintf("objects_%d", count), func(b *testing.B) {
 			b.Run("prepare_once_per_operation", func(b *testing.B) {
-				b.ReportAllocs()
-				for b.Loop() {
-					prepared, err := PrepareAuthorization(ctx, service, "alice")
-					if err != nil {
-						b.Fatal(err)
-					}
-					for i := range requests {
-						response, err := prepared.Authorize(ctx, &requests[i])
-						if err != nil || response == nil || response.Allowed != (i%3 != 2) {
-							b.Fatalf("Authorize object %d: response=%v, error=%v", i, response, err)
-						}
-					}
-				}
-				b.ReportMetric(float64(count), "objects/op")
+				benchmarkPreparedPolicyReadOperation(b, ctx, service, requests)
 			})
 			b.Run("prepare_per_object", func(b *testing.B) {
-				b.ReportAllocs()
-				for b.Loop() {
-					for i := range requests {
-						response, err := service.Authorize(ctx, &requests[i])
-						if err != nil || response == nil || response.Allowed != (i%3 != 2) {
-							b.Fatalf("Authorize object %d: response=%v, error=%v", i, response, err)
-						}
-					}
-				}
-				b.ReportMetric(float64(count), "objects/op")
+				benchmarkPolicyReadPerObject(b, ctx, service, requests)
 			})
 		})
 	}
+}
+
+func benchmarkPolicyReadPerObject(b *testing.B, ctx context.Context, service *policyVariableService, requests []AuthorizationRequest) {
+	b.Helper()
+	b.ReportAllocs()
+	for b.Loop() {
+		for i := range requests {
+			response, err := service.Authorize(ctx, &requests[i])
+			if err != nil || response == nil || response.Allowed != (i%3 != 2) {
+				b.Fatalf("Authorize object %d: response=%v, error=%v", i, response, err)
+			}
+		}
+	}
+	b.ReportMetric(float64(len(requests)), "objects/op")
+}
+
+func benchmarkPreparedPolicyReadOperation(b *testing.B, ctx context.Context, service *policyVariableService, requests []AuthorizationRequest) {
+	b.Helper()
+	b.ReportAllocs()
+	for b.Loop() {
+		prepared, err := PrepareAuthorization(ctx, service, "alice")
+		if err != nil {
+			b.Fatal(err)
+		}
+		for i := range requests {
+			response, err := prepared.Authorize(ctx, &requests[i])
+			if err != nil || response == nil || response.Allowed != (i%3 != 2) {
+				b.Fatalf("Authorize object %d: response=%v, error=%v", i, response, err)
+			}
+		}
+	}
+	b.ReportMetric(float64(len(requests)), "objects/op")
 }

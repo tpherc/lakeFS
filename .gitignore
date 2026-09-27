@@ -23,6 +23,12 @@
 *.iml
 .idea/
 .vscode/
+.github/instructions
+
+### SonarQube ###
+.sonarlint/
+sonar-project.properties
+.github/instructions/sonarqube_mcp.instructions.md
 
 ### Configuration files that may inculde sensitive information
 .env

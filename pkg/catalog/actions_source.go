@@ -55,7 +55,7 @@ func (s *ActionsSource) list(ctx context.Context, record graveler.HookRecord) ([
 		names []string
 	)
 	for {
-		res, hasMore, err := s.catalog.ListEntries(ctx, record.Repository.RepositoryID.String(), record.SourceRef.String(), repositoryLocation, after, DefaultPathDelimiter, amount)
+		res, hasMore, err := s.catalog.ListEntries(ctx, record.Repository.RepositoryID.String(), record.SourceRef.String(), ListEntriesParams{Prefix: repositoryLocation, After: after, Delimiter: DefaultPathDelimiter, Limit: amount})
 		if err != nil {
 			return nil, fmt.Errorf("listing actions: %w", err)
 		}

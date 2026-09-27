@@ -77,7 +77,7 @@ func Serve(
 			cfg.GetBaseConfig().Logging.AuditLogLevel,
 			cfg.GetBaseConfig().Logging.TraceRequestHeaders,
 			authService.IsAdvancedAuth()),
-		AuthMiddleware(logger, swagger, authenticator, authService, externalIdentityProvisioner, sessionStore, &oidcConfig, &cookieAuthConfig),
+		AuthMiddleware(logger, swagger, authenticator, authService, externalIdentityProvisioner, SessionAuthConfig{Store: sessionStore, OIDC: &oidcConfig, Cookie: &cookieAuthConfig}),
 		MetricsMiddleware(swagger, requestHistograms, requestCounter),
 	)
 	controller := NewController(

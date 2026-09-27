@@ -92,71 +92,17 @@ func (c *Catalog) prepareGCReferenceArtifactsWithWriter(ctx context.Context, own
 	if err != nil {
 		return nil, err
 	}
-	var part *gcReferencePartWriter
-	defer func() {
-		if part != nil {
-			part.close()
-		}
-	}()
-	flush := func() error {
-		if part == nil {
-			return nil
-		}
-		if len(manifest.Parts) >= gcReferencesMaxManifestItems {
-			return fmt.Errorf("manifest part count: %w", errGCReferencesLimitExceeded)
-		}
-		location := appendGCReferencePath(base, fmt.Sprintf("part-%06d.parquet", len(manifest.Parts)))
-		info, err := c.uploadGCReferencePart(ctx, owner, part, location)
-		if err != nil {
-			return err
-		}
-		if err := part.file.Close(); err != nil {
-			return fmt.Errorf("close reference part: %w", err)
-		}
-		manifest.Parts = append(manifest.Parts, info)
-		manifest.TotalRows += part.rows
-		_ = os.Remove(part.file.Name())
-		part = nil
-		return nil
+	artifacts := gcReferenceArtifactsWriter{
+		catalog:    c,
+		owner:      owner,
+		manifest:   manifest,
+		progress:   progress,
+		base:       base,
+		createPart: createPart,
 	}
+	defer artifacts.close()
 	emit := func(source *graveler.RepositoryRecord, value *graveler.Value) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		manifest.EntryCount++
-		progress.entries.Add(1)
-		entry, err := ValueToEntry(value)
-		if err != nil {
-			return err
-		}
-		obj, err := block.NewObjectPointer(entry.StorageId, source.StorageID.String(), source.StorageNamespace.String(), entry.Address, addressTypeToCatalog(entry.AddressType).ToIdentifierType())
-		if err != nil {
-			return err
-		}
-		fullAddress, err := obj.FullAddress()
-		if err != nil {
-			return err
-		}
-		address, owned, err := c.GCOwnedRelativeAddress(gcReferencesRepository(owner), obj.StorageID, fullAddress)
-		if err != nil {
-			return err
-		}
-		if !owned {
-			return nil
-		}
-		if part == nil {
-			part, err = createPart()
-			if err != nil {
-				return err
-			}
-		}
-		if err := part.write(address); err != nil {
-			return err
-		}
-		if part.rows >= gcReferencesPartRows || part.bytes >= gcReferencesPartBytes {
-			return flush()
-		}
-		return nil
+		return artifacts.emit(ctx, source, value)
 	}
 	repositories, err := c.Store.ListRepositories(ctx)
 	if err != nil {
@@ -179,7 +125,7 @@ func (c *Catalog) prepareGCReferenceArtifactsWithWriter(ctx context.Context, own
 	if err := repositories.Err(); err != nil {
 		return nil, err
 	}
-	if err := flush(); err != nil {
+	if err := artifacts.flush(ctx); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -189,6 +135,84 @@ func (c *Catalog) prepareGCReferenceArtifactsWithWriter(ctx context.Context, own
 		return nil, err
 	}
 	return c.publishGCReferencesManifest(ctx, owner, base, manifest)
+}
+
+type gcReferenceArtifactsWriter struct {
+	catalog    *Catalog
+	owner      *graveler.RepositoryRecord
+	manifest   *GCReferencesManifest
+	progress   *gcReferencesProgress
+	base       string
+	createPart func() (*gcReferencePartWriter, error)
+	part       *gcReferencePartWriter
+}
+
+func (w *gcReferenceArtifactsWriter) close() {
+	if w.part != nil {
+		w.part.close()
+	}
+}
+
+func (w *gcReferenceArtifactsWriter) flush(ctx context.Context) error {
+	if w.part == nil {
+		return nil
+	}
+	if len(w.manifest.Parts) >= gcReferencesMaxManifestItems {
+		return fmt.Errorf("manifest part count: %w", errGCReferencesLimitExceeded)
+	}
+	location := appendGCReferencePath(w.base, fmt.Sprintf("part-%06d.parquet", len(w.manifest.Parts)))
+	info, err := w.catalog.uploadGCReferencePart(ctx, w.owner, w.part, location)
+	if err != nil {
+		return err
+	}
+	if err := w.part.file.Close(); err != nil {
+		return fmt.Errorf("close reference part: %w", err)
+	}
+	w.manifest.Parts = append(w.manifest.Parts, info)
+	w.manifest.TotalRows += w.part.rows
+	_ = os.Remove(w.part.file.Name())
+	w.part = nil
+	return nil
+}
+
+func (w *gcReferenceArtifactsWriter) emit(ctx context.Context, source *graveler.RepositoryRecord, value *graveler.Value) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	w.manifest.EntryCount++
+	w.progress.entries.Add(1)
+	entry, err := ValueToEntry(value)
+	if err != nil {
+		return err
+	}
+	obj, err := block.NewObjectPointer(entry.StorageId, source.StorageID.String(), source.StorageNamespace.String(), entry.Address, addressTypeToCatalog(entry.AddressType).ToIdentifierType())
+	if err != nil {
+		return err
+	}
+	fullAddress, err := obj.FullAddress()
+	if err != nil {
+		return err
+	}
+	address, owned, err := w.catalog.GCOwnedRelativeAddress(gcReferencesRepository(w.owner), obj.StorageID, fullAddress)
+	if err != nil {
+		return err
+	}
+	if !owned {
+		return nil
+	}
+	if w.part == nil {
+		w.part, err = w.createPart()
+		if err != nil {
+			return err
+		}
+	}
+	if err := w.part.write(address); err != nil {
+		return err
+	}
+	if w.part.rows >= gcReferencesPartRows || w.part.bytes >= gcReferencesPartBytes {
+		return w.flush(ctx)
+	}
+	return nil
 }
 
 func (c *Catalog) publishGCReferencesManifest(ctx context.Context, owner *graveler.RepositoryRecord, base string, manifest *GCReferencesManifest) (*GCReferencesResult, error) {
