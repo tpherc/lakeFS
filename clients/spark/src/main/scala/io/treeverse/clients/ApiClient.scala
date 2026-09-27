@@ -309,6 +309,77 @@ class ApiClient private (conf: APIConfigurations) {
     }
   }
 
+  def getGarbageCollectionReferencesStatus(
+      repoName: String,
+      taskID: String
+  ): PrepareGarbageCollectionReferencesStatus = {
+    val request =
+      new dev.failsafe.function.CheckedSupplier[PrepareGarbageCollectionReferencesStatus]() {
+        def get(): PrepareGarbageCollectionReferencesStatus =
+          internalApi.prepareGarbageCollectionReferencesStatus(repoName, taskID).execute()
+      }
+    retryWrapper.wrapWithRetry(request)
+  }
+
+  def requireGarbageCollectionReferences(
+      repoName: String,
+      taskID: String
+  ): io.treeverse.gc.GCPreparedReferences = {
+    val status = getGarbageCollectionReferencesStatus(repoName, taskID)
+    require(status.getTaskId == taskID && java.lang.Boolean.TRUE == status.getCompleted,
+            "GC reference task is not complete"
+           )
+    require(status.getError == null,
+            "GC reference task failed: " +
+              Option(status.getError).map(_.getMessage).getOrElse("")
+           )
+    val result = status.getResult
+    require(
+      result != null && result.getManifestLocation != null && result.getManifestSha256 != null &&
+        result.getExpiresAt != null,
+      "GC reference task has no certified manifest"
+    )
+    require(java.time.Instant.now().isBefore(result.getExpiresAt.toInstant),
+            "GC reference task expired"
+           )
+    io.treeverse.gc.GCPreparedReferences(result.getManifestLocation,
+                                         result.getManifestSha256,
+                                         result.getExpiresAt.toInstant.toString
+                                        )
+  }
+
+  def prepareGarbageCollectionReferences(
+      repoName: String,
+      minimumAgeSeconds: Long,
+      timeoutSeconds: Int
+  ): (String, io.treeverse.gc.GCPreparedReferences) = {
+    require(minimumAgeSeconds >= 0 && timeoutSeconds > 0, "Invalid GC preparation parameters")
+    // Deliberately no fallback: older preparation APIs cannot certify installation-wide references.
+    val task = internalApi
+      .prepareGarbageCollectionReferencesAsync(
+        repoName,
+        new PrepareGarbageCollectionReferencesRequest().minimumAgeSeconds(minimumAgeSeconds)
+      )
+      .execute()
+    val taskID = task.getId
+    require(taskID != null && taskID.nonEmpty, "GC preparation returned no task ID")
+    org.slf4j.LoggerFactory
+      .getLogger(getClass)
+      .info(s"GC reference preparation started: repository=$repoName task_id=$taskID")
+    val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(timeoutSeconds)
+    var delay = 250L
+    while (System.nanoTime() < deadline) {
+      val status = getGarbageCollectionReferencesStatus(repoName, taskID)
+      require(status.getTaskId == taskID, "GC reference task ID mismatch")
+      if (java.lang.Boolean.TRUE == status.getCompleted) {
+        return (taskID, requireGarbageCollectionReferences(repoName, taskID))
+      }
+      Thread.sleep(delay)
+      delay = math.min(delay * 2, 5000L)
+    }
+    throw new RuntimeException(s"GC reference preparation timed out (task_id: $taskID)")
+  }
+
   def getRepository(repoName: String): Repository = {
     val getRepo = new dev.failsafe.function.CheckedSupplier[Repository]() {
       def get(): Repository = repositoriesApi.getRepository(repoName).execute()

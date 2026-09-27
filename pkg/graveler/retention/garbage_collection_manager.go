@@ -193,8 +193,12 @@ func (m *GarbageCollectionManager) SaveGarbageCollectionCommits(ctx context.Cont
 	startingPointIterator := NewGCStartingPointIterator(commitIterator, branchIterator)
 	defer startingPointIterator.Close()
 
-	// TODO(ariels): Re-use configurable path.
-	gcCommits, err := GetGarbageCollectionCommits(ctx, startingPointIterator, commitGetter, rules, ".")
+	tempDir, err := os.MkdirTemp("", "lakefs-gc-commits-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tempDir)
+	gcCommits, err := GetGarbageCollectionCommits(ctx, startingPointIterator, commitGetter, rules, tempDir)
 	if err != nil {
 		return "", fmt.Errorf("find expired commits: %w", err)
 	}

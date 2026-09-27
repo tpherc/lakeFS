@@ -4,7 +4,6 @@ import io.treeverse.clients.SparkSessionSetup
 import org.apache.commons.io.FileUtils
 import org.apache.commons.lang3.time.DateUtils
 import org.apache.spark.sql.Dataset
-import org.apache.spark.sql.functions.col
 import org.scalatest.BeforeAndAfter
 import org.scalatest.funspec.AnyFunSpec
 import org.scalatest.matchers.should
@@ -12,7 +11,6 @@ import org.scalatestplus.mockito.MockitoSugar
 
 import java.io.File
 import java.nio.file.{Files, Path}
-import java.time.format.DateTimeFormatter
 import java.util.Date
 
 class GarbageCollectionSpec
@@ -200,111 +198,6 @@ class GarbageCollectionSpec
       }
     }
 
-    describe(".writeReports") {
-      it("should write a valid report") {
-        withSparkSession(spark => {
-          import spark.implicits._
-          val runID = java.util.UUID.randomUUID.toString
-          val startTime = java.time.Clock.systemUTC.instant()
-          val firstSlice = "someSlice"
-          val success = true
-          val df = Seq("file1", "file2").toDF("address")
-
-          GarbageCollection.writeReports(dir.toString + "/",
-                                         runID,
-                                         firstSlice,
-                                         startTime,
-                                         startTime,
-                                         success,
-                                         df
-                                        )
-
-          val rootPath = java.nio.file.Paths.get("_lakefs", "retention", "gc", "unified", runID)
-          val summaryPath = dir.resolve(rootPath.resolve("summary.json"))
-          val summary = ujson.read(os.read(os.Path(summaryPath)))
-
-          summary("run_id").str should be(runID)
-          summary("first_slice").str should be(firstSlice)
-          summary("start_time").str should be(DateTimeFormatter.ISO_INSTANT.format(startTime))
-          summary("success").bool should be(success)
-          summary("num_deleted_objects").num should be(df.count())
-
-          val deletedPath = dir.resolve(rootPath.resolve("deleted"))
-          val deletedDF = spark.read.parquet(deletedPath.toString)
-          deletedDF.count() should be(df.count())
-          df.except(deletedDF.select(col("address"))).count() should be(0)
-        })
-      }
-    }
-    describe(".readMarkedAddresses") {
-      it("should raise exception on failed run") {
-        withSparkSession(_ => {
-          val runID = "failed-run"
-          val runPath =
-            dir.resolve(
-              java.nio.file.Paths.get("_lakefs", "retention", "gc", "output_prefix", runID)
-            )
-          runPath.toFile.mkdirs()
-          GarbageCollection.writeJsonSummary(runPath.toString,
-                                             runID,
-                                             "",
-                                             java.time.Clock.systemUTC.instant(),
-                                             java.time.Clock.systemUTC.instant(),
-                                             false,
-                                             0
-                                            )
-          try {
-            GarbageCollection.readMarkedAddresses(dir.toString + "/",
-                                                  runID,
-                                                  "output_prefix"
-                                                 ) // Should throw an exception
-            // Fail test if no exception was thrown
-            throw new Exception("test failed")
-          } catch {
-            // Other types of exceptions will not be caught and test will fail
-            case e: FailedRunException =>
-              e.getMessage.contains(s"Provided mark ($runID) is of a failed run") should be(true)
-          }
-        })
-      }
-      it("should not fail on run without deleted path") {
-        withSparkSession(_ => {
-          val runID = "no-deleted"
-          val runPath =
-            dir.resolve(
-              java.nio.file.Paths.get("_lakefs", "retention", "gc", "output_prefix", runID)
-            )
-          runPath.toFile.mkdirs()
-          GarbageCollection.writeJsonSummary(runPath.toString,
-                                             runID,
-                                             "",
-                                             java.time.Clock.systemUTC.instant(),
-                                             java.time.Clock.systemUTC.instant(),
-                                             true,
-                                             0
-                                            )
-
-          val df = GarbageCollection.readMarkedAddresses(dir.toString + "/", runID, "output_prefix")
-          df.isEmpty should be(true)
-        })
-      }
-      it("should raise exception on missing run") {
-        withSparkSession(_ => {
-          val runID = "not-exist"
-          try {
-            GarbageCollection.readMarkedAddresses(dir.toString + "/",
-                                                  runID
-                                                 ) // Should throw an exception
-            // Fail test if no exception was thrown
-            throw new Exception("test failed")
-          } catch {
-            // Other types of exceptions will not be caught and test will fail
-            case e: FailedRunException =>
-              e.getMessage.contains(s"Mark ID ($runID) does not exist") should be(true)
-          }
-        })
-      }
-    }
     describe(".validateRunModeConfigs") {
       val markID = "markID"
 

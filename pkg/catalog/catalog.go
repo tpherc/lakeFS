@@ -254,6 +254,8 @@ type Catalog struct {
 	signingKey              config.SecureString
 	errorToStatusCodeAndMsg ErrorToStatusCodeAndMsg
 	ownership               storageOwnership
+	gcReferencesRefs        retention.GCRefManager
+	gcRepositoryReader      func(context.Context, graveler.RepositoryID) (*graveler.RepositoryRecord, error)
 	instanceID              string          // unique ID for this server process
 	activeTasks             stdatomic.Int64 // number of tasks currently queued or running
 }
@@ -451,6 +453,8 @@ func New(ctx context.Context, cfg Config) (*Catalog, error) {
 		errorToStatusCodeAndMsg: errToStatusFunc,
 		instanceID:              xid.New().String(),
 		ownership:               newStorageOwnership(cfg.Config.StorageConfig()),
+		gcReferencesRefs:        refManager,
+		gcRepositoryReader:      refManager.GetRepositoryUncached,
 	}
 	go cat.runInstanceHeartbeat(heartbeatCtx)
 	return cat, nil
@@ -2375,6 +2379,12 @@ func (c *Catalog) deleteRepositoryExpiredTasks(ctx context.Context, repo *gravel
 		ent := it.Entry()
 		msg := ent.Value.(*TaskMsg)
 		if msg.Task == nil {
+			continue
+		}
+		if msg.Task.Operation == OpGCReferences {
+			if err := c.cleanupGCReferencesTask(ctx, repo, msg.Task.Id); err != nil {
+				return err
+			}
 			continue
 		}
 		if time.Since(msg.Task.UpdatedAt.AsTime()) < TaskExpiryTime {

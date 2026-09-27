@@ -1636,6 +1636,59 @@ components:
         - completed
         - update_time
 
+    PrepareGarbageCollectionReferencesRequest:
+      type: object
+      properties:
+        minimum_age_seconds:
+          type: integer
+          format: int64
+          minimum: 1
+          default: 86400
+          description: Minimum physical-file age. The server fixes the inventory cutoff before starting reference preparation.
+
+    GarbageCollectionReferencesResult:
+      type: object
+      required:
+        - manifest_location
+        - manifest_sha256
+        - expires_at
+      properties:
+        manifest_location:
+          type: string
+          description: Exact location of the complete installation-wide protection manifest on the target repository backend.
+        manifest_sha256:
+          type: string
+          description: SHA-256 digest of the exact manifest bytes, anchored in the durable successful task record.
+        expires_at:
+          type: string
+          format: date-time
+          description: Preparation validity deadline. Expired preparations cannot authorize a sweep.
+
+    PrepareGarbageCollectionReferencesStatus:
+      type: object
+      required:
+        - task_id
+        - completed
+        - update_time
+        - progress
+      properties:
+        task_id:
+          type: string
+        completed:
+          type: boolean
+          description: True when preparation has finished, successfully or with an error.
+        update_time:
+          type: string
+          format: date-time
+        progress:
+          type: integer
+          format: int64
+          description: Number of catalog entries examined so far.
+        result:
+          $ref: "#/components/schemas/GarbageCollectionReferencesResult"
+        error:
+          $ref: "#/components/schemas/Error"
+
     PrepareGCUncommittedRequest:
       type: object
       properties:
@@ -6235,6 +6288,80 @@ paths:
           $ref: "#/components/responses/NotFound"
         429:
           description: too many requests
+        default:
+          $ref: "#/components/responses/ServerError"
+
+  /repositories/{repository}/gc/prepare_references/async:
+    parameters:
+      - in: path
+        name: repository
+        required: true
+        schema:
+          type: string
+    post:
+      tags:
+        - internal
+      operationId: prepareGarbageCollectionReferencesAsync
+      summary: prepare installation-wide physical reference protection for one repository
+      description: Requires retention:PrepareGarbageCollectionReferences on resource '*'. This scan reads source catalogs and writes protection artifacts only to the target repository backend.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PrepareGarbageCollectionReferencesRequest"
+      responses:
+        202:
+          description: Reference preparation task started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskCreation"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        default:
+          $ref: "#/components/responses/ServerError"
+
+  /repositories/{repository}/gc/prepare_references/status:
+    parameters:
+      - in: path
+        name: repository
+        required: true
+        schema:
+          type: string
+    get:
+      tags:
+        - internal
+      operationId: prepareGarbageCollectionReferencesStatus
+      summary: validate and get installation-wide reference preparation status
+      description: Requires retention:PrepareGarbageCollectionReferences on resource '*'. Successful results are valid only for the captured target instance and the validating server's current ownership configuration.
+      parameters:
+        - in: query
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Reference preparation status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrepareGarbageCollectionReferencesStatus"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
         default:
           $ref: "#/components/responses/ServerError"
 

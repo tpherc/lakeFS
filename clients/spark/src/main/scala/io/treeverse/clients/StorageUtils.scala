@@ -72,7 +72,7 @@ object StorageUtils {
     }
 
     def uriToStorageAccountName(storageNsURI: URI): String = {
-      storageNsURI.getHost.split('.')(0)
+      storageNsURI.getHost.split('.')(0).toLowerCase(java.util.Locale.ROOT)
     }
 
     // https://<storage_account>.blob.core.windows.net/<container>/<blob/path>

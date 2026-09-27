@@ -43,6 +43,7 @@ object S3ClientBuilder extends S3ClientBuilder {
     import com.amazonaws.auth.{
       AWSCredentialsProvider,
       DefaultAWSCredentialsProviderChain,
+      EnvironmentVariableCredentialsProvider,
       STSAssumeRoleSessionCredentialsProvider,
       AWSStaticCredentialsProvider,
       BasicAWSCredentials
@@ -73,8 +74,8 @@ object S3ClientBuilder extends S3ClientBuilder {
     val roleArn = hc.getTrimmed(Constants.ASSUMED_ROLE_ARN, "")
     val accessKey = hc.getTrimmed(Constants.ACCESS_KEY, null)
     val secretKey = hc.getTrimmed(Constants.SECRET_KEY, null)
-    val wantHadoopAssume =
-      hc.getTrimmed(Constants.AWS_CREDENTIALS_PROVIDER, null) == AssumedRoleCredentialProvider.NAME
+    val selectedProvider = hc.getTrimmed(Constants.AWS_CREDENTIALS_PROVIDER, "")
+    val wantHadoopAssume = selectedProvider == AssumedRoleCredentialProvider.NAME
     val hadoopAssumeAvailable: Boolean = wantHadoopAssume && Try(
       Class.forName("org.apache.hadoop.fs.s3a.auth.AssumedRoleCredentialProvider")
     ).toOption.exists(classOf[AWSCredentialsProvider].isAssignableFrom)
@@ -84,8 +85,11 @@ object S3ClientBuilder extends S3ClientBuilder {
       if (useHadoopProvider) {
         logger.info("Using Hadoop AssumedRoleCredentialProvider as base.")
         new AssumedRoleCredentialProvider(new java.net.URI(s"s3a://$bucket"), hc)
+      } else if (selectedProvider == classOf[EnvironmentVariableCredentialsProvider].getName) {
+        logger.info("Using EnvironmentVariableCredentialsProvider")
+        new EnvironmentVariableCredentialsProvider()
       } else if (accessKey != null && secretKey != null) {
-        logger.info("Using access key ID {} {}", accessKey: Any, "secret key ******")
+        logger.info("Using configured S3 credentials")
         new AWSStaticCredentialsProvider(new BasicAWSCredentials(accessKey, secretKey))
       } else {
         logger.info("Using DefaultAWSCredentialsProviderChain")

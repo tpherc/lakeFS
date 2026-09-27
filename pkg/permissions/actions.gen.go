@@ -53,6 +53,7 @@ var Actions = []string{
 	"auth:ReadExternalPrincipal",
 	"ci:ReadAction",
 	"retention:PrepareGarbageCollectionCommits",
+	"retention:PrepareGarbageCollectionReferences",
 	"retention:GetGarbageCollectionRules",
 	"retention:SetGarbageCollectionRules",
 	"retention:PrepareGarbageCollectionUncommitted",

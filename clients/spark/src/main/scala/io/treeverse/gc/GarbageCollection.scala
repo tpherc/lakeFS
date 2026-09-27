@@ -2,19 +2,11 @@ package io.treeverse.gc
 
 import io.treeverse.clients.LakeFSContext._
 import io.treeverse.clients._
-import org.apache.commons.lang3.time.DateUtils
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.apache.spark.storage.StorageLevel
-import org.json4s.JsonDSL._
-import org.json4s._
-import org.json4s.native.JsonMethods._
 
-import java.net.URI
-import java.time.format.DateTimeFormatter
 import java.util.Date
-import scala.jdk.CollectionConverters._
 import org.slf4j.LoggerFactory
 import org.slf4j.Logger
 
@@ -109,270 +101,116 @@ object GarbageCollection {
   def main(args: Array[String]): Unit = {
     val region = if (args.length == 2) args(1) else ""
     val repo = args(0)
-    run(region, repo)
+    try run(region, repo)
+    finally spark.stop()
   }
 
-  private def run(
-      region: String,
-      repo: String,
-      uncommittedOnly: Boolean = false,
-      sourceName: String = UNIFIED_GC_SOURCE_NAME,
-      outputPrefix: String =
-        "unified" // TODO (johnnyaug): remove this parameter when we remove old GC
-  ): Unit = {
-    var runID = ""
-    var firstSlice = ""
-    var success = false
-    var addressesToDelete = spark.emptyDataFrame.withColumn("address", lit(""))
+  private def run(region: String, repo: String): Unit = {
     val hc = spark.sparkContext.hadoopConfiguration
-    val apiURL = hc.get(LAKEFS_CONF_API_URL_KEY)
-    val accessKey = hc.get(LAKEFS_CONF_API_ACCESS_KEY_KEY)
-    val secretKey = hc.get(LAKEFS_CONF_API_SECRET_KEY_KEY)
-    val connectionTimeout = hc.get(LAKEFS_CONF_API_CONNECTION_TIMEOUT_SEC_KEY)
-    val readTimeout = hc.get(LAKEFS_CONF_API_READ_TIMEOUT_SEC_KEY)
-    val minAgeStr = hc.get(LAKEFS_CONF_DEBUG_GC_UNCOMMITTED_MIN_AGE_SECONDS_KEY)
-    val minAgeSeconds = {
-      if (minAgeStr != null && minAgeStr.nonEmpty && minAgeStr.toInt > 0) {
-        minAgeStr.toInt
-      } else
-        DEFAULT_GC_UNCOMMITTED_MIN_AGE_SECONDS
-    }
-    val cutoffTime = DateUtils.addSeconds(new Date(), -minAgeSeconds)
-    val startTime = java.time.Clock.systemUTC.instant()
-
     val shouldMark = hc.getBoolean(LAKEFS_CONF_GC_DO_MARK, true)
-    // Unified GC does not support sweep mode: it only marks objects for deletion
     val shouldSweep = hc.getBoolean(LAKEFS_CONF_GC_DO_SWEEP, true)
     val markID = hc.get(LAKEFS_CONF_GC_MARK_ID, "")
-
     validateRunModeConfigs(shouldMark, shouldSweep, markID)
-    val apiConf =
-      APIConfigurations(apiURL, accessKey, secretKey, connectionTimeout, readTimeout, sourceName)
-    val apiClient = ApiClient.get(apiConf)
-    val storageID = apiClient.getRepository(repo).getStorageId
-    val storageType = apiClient.getBlockstoreType(storageID)
-    var storageNamespace = apiClient.getStorageNamespace(repo, StorageClientType.HadoopFS)
-    if (!storageNamespace.endsWith("/")) {
-      storageNamespace += "/"
+    val apiClient = ApiClient.get(
+      APIConfigurations(
+        hc.get(LAKEFS_CONF_API_URL_KEY),
+        hc.get(LAKEFS_CONF_API_ACCESS_KEY_KEY),
+        hc.get(LAKEFS_CONF_API_SECRET_KEY_KEY),
+        hc.get(LAKEFS_CONF_API_CONNECTION_TIMEOUT_SEC_KEY),
+        hc.get(LAKEFS_CONF_API_READ_TIMEOUT_SEC_KEY),
+        UNIFIED_GC_SOURCE_NAME
+      )
+    )
+    val repository = apiClient.getRepository(repo)
+    val provider = apiClient.getBlockstoreType(repository.getStorageId)
+    val namespace = repository.getStorageNamespace.stripSuffix("/") + "/"
+    val settings = GCTarget.resolvedSettings(hc)
+    val existing =
+      if (shouldMark) None
+      else {
+        val location = s"${namespace}_lakefs/retention/gc/unified/$markID/candidates.json"
+        Some(
+          GCManifest.decode[GCCandidateManifest](
+            GCTarget.bootstrapRead(location, namespace, provider, settings)
+          )
+        )
+      }
+    val (runID, proof) = if (shouldMark) {
+      val age = hc.getLong(LAKEFS_CONF_DEBUG_GC_UNCOMMITTED_MIN_AGE_SECONDS_KEY,
+                           DEFAULT_GC_UNCOMMITTED_MIN_AGE_SECONDS.toLong
+                          )
+      apiClient.prepareGarbageCollectionReferences(
+        repo,
+        age,
+        hc.getInt(LAKEFS_CONF_GC_PREPARE_COMMITS_TIMEOUT_SECONDS,
+                  DEFAULT_LAKEFS_CONF_GC_PREPARE_COMMITS_TIMEOUT_SECONDS
+                 )
+      )
+    } else {
+      val candidate = existing.get
+      require(candidate.run_id == markID, "GC mark ID mismatch")
+      (markID, apiClient.requireGarbageCollectionReferences(repo, candidate.references.task_id))
     }
-
+    logger.info(
+      s"GC preparation completed: repository=$repo run_id=$runID manifest=${proof.manifest_location}"
+    )
+    val bytes = GCTarget.bootstrapRead(proof.manifest_location, namespace, provider, settings)
+    require(GCManifest.sha256(bytes) == proof.manifest_sha256,
+            "GC reference manifest checksum mismatch"
+           )
+    val reference = GCManifest.decode[GCReferenceManifest](bytes)
+    GCManifest.validateReferences(reference, repo, java.time.Instant.now())
+    require(
+      reference.run_id == runID && reference.storage_namespace.stripSuffix(
+        "/"
+      ) + "/" == namespace &&
+        reference.storage_id == Option(repository.getStorageId).getOrElse(""),
+      "GC reference target does not match repository"
+    )
+    logger.info(
+      s"GC certified references: run_id=$runID cutoff=${reference.cutoff_time} " +
+        s"sources=${reference.source_count} commits=${reference.commit_count} entries=${reference.entry_count} " +
+        s"retained_rows=${reference.total_rows}"
+    )
+    val target = new GCTarget(reference, proof, settings)
+    target.read(proof.manifest_location)
+    val nativeClient = target.nativeClient(spark.sparkContext, region)
     try {
       if (shouldMark) {
-        // Read objects directly from object storage
-        val dataDF = listObjects(storageNamespace, cutoffTime)
-
-        // Get first Slice
-        firstSlice = getFirstSlice(dataDF, repo)
-
-        // Process uncommitted
-        val uncommittedGCRunInfo =
-          new APIUncommittedAddressLister(apiClient).listUncommittedAddresses(spark, repo)
-        var uncommittedDF =
-          spark.emptyDataFrame.withColumn("physical_address", lit(""))
-
-        if (uncommittedGCRunInfo.uncommittedLocation != "") {
-          val uncommittedLocation = ApiClient
-            .translateURI(new URI(uncommittedGCRunInfo.uncommittedLocation), storageType)
-          val uncommittedPath = new Path(uncommittedLocation)
-          val fs = uncommittedPath.getFileSystem(hc)
-          // Backwards compatibility with lakefs servers that return address even when there's no uncommitted data
-          if (fs.exists(uncommittedPath)) {
-            uncommittedDF = spark.read.parquet(uncommittedLocation.toString)
-          }
-        }
-        uncommittedDF = uncommittedDF.select(uncommittedDF("physical_address").as("address"))
-        uncommittedDF = uncommittedDF.repartition(uncommittedDF.col("address"))
-        runID = uncommittedGCRunInfo.runID
-
-        // Process committed
-        val clientStorageNamespace =
-          apiClient.getStorageNamespace(repo, StorageClientType.SDKClient)
-        val prepareCommitsTimeoutSeconds = hc.getInt(
-          LAKEFS_CONF_GC_PREPARE_COMMITS_TIMEOUT_SECONDS,
-          DEFAULT_LAKEFS_CONF_GC_PREPARE_COMMITS_TIMEOUT_SECONDS
-        )
-        val committedLister =
-          if (uncommittedOnly) new NaiveCommittedAddressLister()
-          else
-            new ActiveCommitsAddressLister(apiClient,
-                                           repo,
-                                           storageType,
-                                           prepareCommitsTimeoutSeconds
-                                          )
-        val committedDF =
-          committedLister.listCommittedAddresses(spark, storageNamespace, clientStorageNamespace)
-
-        addressesToDelete = dataDF
-          .select("address")
-          .repartition(dataDF.col("address"))
-          .except(committedDF)
-          .except(uncommittedDF)
-          .persist(StorageLevel.MEMORY_AND_DISK)
-
-        committedDF.unpersist()
-        uncommittedDF.unpersist()
+        val retained = GCArtifacts.validatedReferences(spark, target)
+        try {
+          // The cutoff belongs to the original server request and never advances during retries or sweeping.
+          val inventoryPrefix = s"${target.namespace}_lakefs/retention/gc/unified/$runID/inventory/"
+          val inventoryParts = GCArtifacts
+            .writeAddressParts(target, inventoryPrefix, GCInventory.addresses(nativeClient, target))
+            .toVector
+          val inventory = GCArtifacts.readParts(spark,
+                                                target,
+                                                inventoryParts,
+                                                inventoryParts.map(_.row_count).sum,
+                                                "address"
+                                               )
+          val candidate =
+            GCArtifacts.writeCandidates(spark, target, inventory.select("address").except(retained))
+          logger.info(
+            s"GC mark successful: run_id=$runID candidates=${candidate.total_rows} " +
+              s"manifest=${GCArtifacts.candidateLocation(target, runID)}"
+          )
+        } finally retained.unpersist()
       }
-
-      // delete marked addresses
       if (shouldSweep) {
-        val markedAddresses = if (shouldMark) {
-          logger.info("deleting marked addresses from run ID: " + runID)
-          addressesToDelete
-        } else {
-          logger.info("deleting marked addresses from mark ID: " + markID)
-          readMarkedAddresses(storageNamespace, markID, outputPrefix)
-        }
-
-        val storageNSForSdkClient = getStorageNSForSdkClient(apiClient: ApiClient, repo)
-        val hcValues = spark.sparkContext.broadcast(
-          HadoopUtils.getHadoopConfigurationValues(hc, "fs.", "lakefs.", "google.cloud.")
+        // Both run modes reopen the same immutable candidate artifact; no inventory/classification lineage survives.
+        val candidate = GCManifest.decode[GCCandidateManifest](
+          target.read(GCArtifacts.candidateLocation(target, runID))
         )
-        val configMapper = new ConfigMapper(hcValues)
-        bulkRemove(configMapper, markedAddresses, storageNSForSdkClient, region, storageType)
-        logger.info("finished deleting")
+        val candidates = GCArtifacts.validatedSweepCandidates(spark, target, candidate)
+        try {
+          val current = apiClient.requireGarbageCollectionReferences(repo, reference.task_id)
+          require(current == proof, "GC reference certification changed before sweep")
+          GCSweeper.sweep(target, candidates, BulkRemoverFactory(nativeClient, namespace))
+        } finally candidates.unpersist()
       }
-
-      // Flow completed successfully - set success to true
-      success = true
-    } finally {
-      if (runID.nonEmpty && shouldMark) {
-        writeReports(
-          storageNamespace,
-          runID,
-          firstSlice,
-          startTime,
-          cutoffTime.toInstant,
-          success,
-          addressesToDelete,
-          outputPrefix
-        )
-      }
-    }
+    } finally nativeClient.close()
   }
 
-  private def bulkRemove(
-      configMapper: ConfigMapper,
-      readKeysDF: DataFrame,
-      storageNamespace: String,
-      region: String,
-      storageType: String
-  ): Unit = {
-    import spark.implicits._
-
-    val it = readKeysDF
-      .select("address")
-      .map(_.getString(0))
-      .toLocalIterator()
-
-    while (it.hasNext) {
-      val storageClient: StorageClient =
-        StorageClients(storageType, configMapper, storageNamespace, region)
-      val bulkRemover =
-        BulkRemoverFactory(storageClient, storageNamespace)
-      val chunkSize = bulkRemover.getMaxBulkSize
-      val chunk = it.asScala.take(chunkSize).toSeq
-      bulkRemover.deleteObjects(chunk, storageNamespace)
-    }
-  }
-
-  def writeReports(
-      storageNamespace: String,
-      runID: String,
-      firstSlice: String,
-      startTime: java.time.Instant,
-      cutoffTime: java.time.Instant,
-      success: Boolean,
-      expiredAddresses: DataFrame,
-      outputPrefix: String = "unified"
-  ): Unit = {
-    val reportDst = formatRunPath(storageNamespace, runID, outputPrefix)
-    logger.info(s"Report for mark_id=$runID path=$reportDst")
-
-    expiredAddresses.write.parquet(s"$reportDst/deleted")
-    expiredAddresses.write.text(s"$reportDst/deleted.text")
-
-    val summary =
-      writeJsonSummary(reportDst,
-                       runID,
-                       firstSlice,
-                       startTime,
-                       cutoffTime,
-                       success,
-                       expiredAddresses.count()
-                      )
-    logger.info(s"Report summary=$summary")
-  }
-
-  private def formatRunPath(
-      storageNamespace: String,
-      runID: String,
-      outputPrefix: String
-  ): String = {
-    s"${storageNamespace}_lakefs/retention/gc/$outputPrefix/$runID"
-  }
-
-  def readMarkedAddresses(
-      storageNamespace: String,
-      markID: String,
-      outputPrefix: String = "unified"
-  ): DataFrame = {
-    val reportPath = new Path(
-      formatRunPath(storageNamespace, markID, outputPrefix) + "/summary.json"
-    )
-    val fs = reportPath.getFileSystem(spark.sparkContext.hadoopConfiguration)
-    if (!fs.exists(reportPath)) {
-      throw new FailedRunException(s"Mark ID ($markID) does not exist")
-    }
-    val markedRunSummary = spark.read.json(reportPath.toString)
-    if (!markedRunSummary.first.getAs[Boolean]("success")) {
-      throw new FailedRunException(s"Provided mark ($markID) is of a failed run")
-    } else {
-      val deletedPath = new Path(formatRunPath(storageNamespace, markID, outputPrefix) + "/deleted")
-      if (!fs.exists(deletedPath)) {
-        logger.info(s"Mark ID ($markID) does not contain deleted files")
-        spark.emptyDataFrame.withColumn("address", lit(""))
-      } else {
-        spark.read.parquet(deletedPath.toString)
-      }
-    }
-  }
-
-  def writeJsonSummary(
-      dst: String,
-      runID: String,
-      firstSlice: String,
-      startTime: java.time.Instant,
-      cutoffTime: java.time.Instant,
-      success: Boolean,
-      numDeletedObjects: Long
-  ): String = {
-    val dstPath = new Path(s"$dst/summary.json")
-    val dstFS = dstPath.getFileSystem(spark.sparkContext.hadoopConfiguration)
-    val jsonSummary = JObject(
-      "run_id" -> runID,
-      "success" -> success,
-      "first_slice" -> firstSlice,
-      "start_time" -> DateTimeFormatter.ISO_INSTANT.format(startTime),
-      "cutoff_time" -> DateTimeFormatter.ISO_INSTANT.format(cutoffTime),
-      "num_deleted_objects" -> numDeletedObjects
-    )
-    val summary = compact(render(jsonSummary))
-    val stream = dstFS.create(dstPath)
-    try {
-      stream.writeBytes(summary)
-    } finally {
-      stream.close()
-    }
-    summary
-  }
-
-  private def getStorageNSForSdkClient(apiClient: ApiClient, repo: String): String = {
-    // The remove operation uses an SDK client to directly access the underlying storage, and therefore does not need
-    // a translated storage namespace that triggers processing by Hadoop FileSystems.
-    var storageNSForSdkClient = apiClient.getStorageNamespace(repo, StorageClientType.SDKClient)
-    if (!storageNSForSdkClient.endsWith("/")) {
-      storageNSForSdkClient += "/"
-    }
-    storageNSForSdkClient
-  }
 }

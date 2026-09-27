@@ -129,6 +129,7 @@ public class JSON {
         gsonBuilder.registerTypeAdapterFactory(new io.lakefs.clients.sdk.model.FindMergeBaseResult.CustomTypeAdapterFactory());
         gsonBuilder.registerTypeAdapterFactory(new io.lakefs.clients.sdk.model.GarbageCollectionConfig.CustomTypeAdapterFactory());
         gsonBuilder.registerTypeAdapterFactory(new io.lakefs.clients.sdk.model.GarbageCollectionPrepareResponse.CustomTypeAdapterFactory());
+        gsonBuilder.registerTypeAdapterFactory(new io.lakefs.clients.sdk.model.GarbageCollectionReferencesResult.CustomTypeAdapterFactory());
         gsonBuilder.registerTypeAdapterFactory(new io.lakefs.clients.sdk.model.GarbageCollectionRule.CustomTypeAdapterFactory());
         gsonBuilder.registerTypeAdapterFactory(new io.lakefs.clients.sdk.model.GarbageCollectionRules.CustomTypeAdapterFactory());
         gsonBuilder.registerTypeAdapterFactory(new io.lakefs.clients.sdk.model.Group.CustomTypeAdapterFactory());
@@ -161,6 +162,8 @@ public class JSON {
         gsonBuilder.registerTypeAdapterFactory(new io.lakefs.clients.sdk.model.PrepareGCUncommittedRequest.CustomTypeAdapterFactory());
         gsonBuilder.registerTypeAdapterFactory(new io.lakefs.clients.sdk.model.PrepareGCUncommittedResponse.CustomTypeAdapterFactory());
         gsonBuilder.registerTypeAdapterFactory(new io.lakefs.clients.sdk.model.PrepareGarbageCollectionCommitsStatus.CustomTypeAdapterFactory());
+        gsonBuilder.registerTypeAdapterFactory(new io.lakefs.clients.sdk.model.PrepareGarbageCollectionReferencesRequest.CustomTypeAdapterFactory());
+        gsonBuilder.registerTypeAdapterFactory(new io.lakefs.clients.sdk.model.PrepareGarbageCollectionReferencesStatus.CustomTypeAdapterFactory());
         gsonBuilder.registerTypeAdapterFactory(new io.lakefs.clients.sdk.model.PresignMultipartUpload.CustomTypeAdapterFactory());
         gsonBuilder.registerTypeAdapterFactory(new io.lakefs.clients.sdk.model.PullRequest.CustomTypeAdapterFactory());
         gsonBuilder.registerTypeAdapterFactory(new io.lakefs.clients.sdk.model.PullRequestBasic.CustomTypeAdapterFactory());
