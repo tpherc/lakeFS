@@ -42,6 +42,11 @@ var errUnhandledBucketGetKind = errors.New("unhandled bucket GET kind")
 
 type ListObjects struct{}
 
+func listEntriesPermissionFilter(req *http.Request, o *RepoOperation) catalog.ListEntriesOptionsFunc {
+	return catalog.WithListEntriesPermissionFilter(req.Context(), o.Authorizer, o.Principal, o.Repository.Name,
+		httputil.ExtractClientIP(req.Header, req.RemoteAddr))
+}
+
 // bucketGetKind is the operation a GET on a bucket resolves to. Every decision about such a
 // request (the permission it requires and the handler it reaches) must derive from the same
 // classifyBucketGet result, so the two cannot disagree.
@@ -250,6 +255,7 @@ func (controller *ListObjects) ListV2(w http.ResponseWriter, req *http.Request, 
 			from.Path,
 			delimiter,
 			maxKeys,
+			listEntriesPermissionFilter(req, o),
 		)
 		log := o.Log(req).WithError(err).WithFields(logging.Fields{
 			"ref":  prefix.Ref,
@@ -359,6 +365,7 @@ func (controller *ListObjects) ListV1(w http.ResponseWriter, req *http.Request, 
 			marker.Path,
 			delimiter,
 			maxKeys,
+			listEntriesPermissionFilter(req, o),
 		)
 		if errors.Is(err, graveler.ErrNotFound) {
 			results = make([]*catalog.DBEntry, 0) // no results found
