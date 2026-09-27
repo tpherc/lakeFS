@@ -44,6 +44,8 @@ func newDownloadBackoff() backoff.BackOff {
 }
 
 type Downloader struct {
+	// ReadPresign overrides automatic source capability selection when supplied.
+	ReadPresign         *bool
 	Client              *apigen.ClientWithResponses
 	PreSign             bool
 	HTTPClient          *http.Client
@@ -131,18 +133,28 @@ func (d *Downloader) downloadObjectCore(ctx context.Context, src uri.URI, dst st
 // DownloadWithObjectInfo downloads an object from lakeFS using pre-fetched object information,
 // avoiding the need for a separate stat call.
 func (d *Downloader) DownloadWithObjectInfo(ctx context.Context, src uri.URI, dst string, tracker *progress.Tracker, objectStat *apigen.ObjectStats) error {
-	return d.downloadObjectCore(ctx, src, dst, tracker, objectStat)
+	download := *d
+	if download.ReadPresign != nil {
+		download.PreSign = *download.ReadPresign
+	} else if download.PreSign && objectStat != nil {
+		var err error
+		download.PreSign, err = ObjectSupportsPresign(ctx, d.Client, swag.StringValue(objectStat.StorageId))
+		if err != nil {
+			return err
+		}
+	}
+	return download.downloadObjectCore(ctx, src, dst, tracker, objectStat)
 }
 
 // Download downloads an object from lakeFS to a local file, create the destination directory if needed.
 func (d *Downloader) Download(ctx context.Context, src uri.URI, dst string, tracker *progress.Tracker) error {
 	// Check if we need to call StatObjectWithResponse (for symlinks or presign multipart)
 	var objectStat *apigen.ObjectStats
-	if d.SymlinkSupport || d.PreSign {
+	if d.SymlinkSupport || d.PreSign || swag.BoolValue(d.ReadPresign) {
 		statResp, err := d.Client.StatObjectWithResponse(ctx, src.Repository, src.Ref, &apigen.StatObjectParams{
 			Path:         apiutil.Value(src.Path),
 			UserMetadata: swag.Bool(d.SymlinkSupport), // Only request metadata if symlink support is enabled
-			Presign:      swag.Bool(d.PreSign),        // Only presign if needed
+			Presign:      swag.Bool(false),
 		})
 		if err != nil {
 			return fmt.Errorf("download failed: %w", err)
@@ -153,7 +165,7 @@ func (d *Downloader) Download(ctx context.Context, src uri.URI, dst string, trac
 		objectStat = statResp.JSON200
 	}
 
-	return d.downloadObjectCore(ctx, src, dst, tracker, objectStat)
+	return d.DownloadWithObjectInfo(ctx, src, dst, tracker, objectStat)
 }
 
 // downloadPresignMultipart downloads a large object, must be larger or equal to PartSize using a presigned URL.

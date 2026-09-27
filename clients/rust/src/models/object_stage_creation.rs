@@ -12,6 +12,9 @@ use crate::models;
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ObjectStageCreation {
+    /// Configured backend containing the source object. Omitted or empty uses the repository backend.
+    #[serde(rename = "storage_id", skip_serializing_if = "Option::is_none")]
+    pub storage_id: Option<String>,
     #[serde(rename = "physical_address")]
     pub physical_address: String,
     #[serde(rename = "checksum")]
@@ -33,6 +36,7 @@ pub struct ObjectStageCreation {
 impl ObjectStageCreation {
     pub fn new(physical_address: String, checksum: String, size_bytes: i64) -> ObjectStageCreation {
         ObjectStageCreation {
+            storage_id: None,
             physical_address,
             checksum,
             size_bytes,

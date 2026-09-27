@@ -17,8 +17,8 @@ type Adapter struct {
 	adapters map[string]block.Adapter
 }
 
-// BuildMultiStorageAdapter returns the single concrete adapter in legacy
-// single-backend mode, or a routing adapter for canonical multi-backend mode.
+// BuildMultiStorageAdapter validates every storage ID before native access,
+// including the empty ID used by legacy single-backend configurations.
 func BuildMultiStorageAdapter(storageConfig config.StorageConfig, builtAdapters map[string]block.Adapter) (block.Adapter, error) {
 	storageIDs := storageConfig.GetStorageIDs()
 	for _, storageID := range storageIDs {
@@ -31,10 +31,6 @@ func BuildMultiStorageAdapter(storageConfig config.StorageConfig, builtAdapters 
 			return nil, fmt.Errorf("storage id %q: %w", storageID, config.ErrBadConfiguration)
 		}
 	}
-	if len(storageIDs) == 1 && !storageConfig.IsMultiStorage() {
-		return builtAdapters[storageIDs[0]], nil
-	}
-
 	return &Adapter{
 		adapters: builtAdapters,
 	}, nil
@@ -50,9 +46,6 @@ func containsStorageID(storageIDs []string, storageID string) bool {
 }
 
 func (a *Adapter) resolveStorageID(storageID string) (string, error) {
-	if storageID == config.SingleBlockstoreID {
-		return "", fmt.Errorf("storage id %q: %w", storageID, config.ErrNoStorageConfig)
-	}
 	if _, ok := a.adapters[storageID]; !ok {
 		return "", fmt.Errorf("storage id %q: %w", storageID, config.ErrNoStorageConfig)
 	}
@@ -236,6 +229,9 @@ func (a *Adapter) CompleteMultiPartUpload(ctx context.Context, obj block.ObjectP
 }
 
 func (a *Adapter) BlockstoreType() string {
+	if legacy, ok := a.adapters[config.SingleBlockstoreID]; ok {
+		return legacy.BlockstoreType()
+	}
 	return "multi"
 }
 
@@ -299,6 +295,9 @@ func (a *Adapter) GetRegion(ctx context.Context, storageID, storageNamespace str
 }
 
 func (a *Adapter) RuntimeStats() map[string]string {
+	if legacy, ok := a.adapters[config.SingleBlockstoreID]; ok {
+		return legacy.RuntimeStats()
+	}
 	stats := make(map[string]string)
 	for storageID, adapter := range a.adapters {
 		for key, value := range adapter.RuntimeStats() {

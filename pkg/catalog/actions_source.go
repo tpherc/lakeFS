@@ -95,12 +95,11 @@ func (s *ActionsSource) load(ctx context.Context, record graveler.HookRecord, na
 	}
 	// get action address
 	blockAdapter := s.catalog.BlockAdapter
-	reader, err := blockAdapter.Get(ctx, block.ObjectPointer{
-		StorageID:        repo.StorageID,
-		StorageNamespace: repo.StorageNamespace,
-		IdentifierType:   block.IdentifierTypeRelative,
-		Identifier:       ent.PhysicalAddress,
-	})
+	obj, err := block.NewObjectPointer(ent.StorageID, repo.StorageID, repo.StorageNamespace, ent.PhysicalAddress, ent.AddressType.ToIdentifierType())
+	if err != nil {
+		return nil, fmt.Errorf("resolving action file %s: %w", name, err)
+	}
+	reader, err := blockAdapter.Get(ctx, obj)
 	if err != nil {
 		return nil, fmt.Errorf("getting action file %s: %w", name, err)
 	}

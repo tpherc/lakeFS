@@ -19,7 +19,7 @@ import re  # noqa: F401
 import json
 
 
-
+from typing import Optional
 try:
     from pydantic.v1 import BaseModel, Field, StrictStr, validator
 except ImportError:
@@ -29,10 +29,11 @@ class ImportLocation(BaseModel):
     """
     ImportLocation
     """
+    storage_id: Optional[StrictStr] = Field(None, description="Configured backend containing this source. Omitted or empty uses the repository backend.")
     type: StrictStr = Field(..., description="Path type, can either be 'common_prefix' or 'object'")
-    path: StrictStr = Field(..., description="A source location to a 'common_prefix' or to a single object. Must match the lakeFS installation blockstore type.")
+    path: StrictStr = Field(..., description="A source location to a 'common_prefix' or to a single object. Must match the selected backend's native address format.")
     destination: StrictStr = Field(..., description="Destination for the imported objects on the branch. Must be a relative path to the branch. If the type is an 'object', the destination is the exact object name under the branch. If the type is a 'common_prefix', the destination is the prefix under the branch. ")
-    __properties = ["type", "path", "destination"]
+    __properties = ["storage_id", "type", "path", "destination"]
 
     @validator('type')
     def type_validate_enum(cls, value):
@@ -77,6 +78,7 @@ class ImportLocation(BaseModel):
             return ImportLocation.parse_obj(obj)
 
         _obj = ImportLocation.parse_obj({
+            "storage_id": obj.get("storage_id"),
             "type": obj.get("type"),
             "path": obj.get("path"),
             "destination": obj.get("destination")

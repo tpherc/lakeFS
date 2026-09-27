@@ -56,8 +56,8 @@ export const TextDownloader: FC<RendererComponentWithTextCallback> = ({ repoId, 
     return <>{component}</>;
 };
 
-export const MarkdownRenderer: FC<RendererComponentWithText> = ({ text, repoId, refId, path, presign = false }) => {
-    return useMarkdownProcessor(text, repoId, refId, path, presign);
+export const MarkdownRenderer: FC<RendererComponentWithText> = ({ text, repoId, refId, path }) => {
+    return useMarkdownProcessor(text, repoId, refId, path);
 };
 
 export const TextRenderer: FC<RendererComponentWithText> = ({ contentType, fileExtension, text }) => {

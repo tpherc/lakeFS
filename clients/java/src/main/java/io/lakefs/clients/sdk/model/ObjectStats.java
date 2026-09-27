@@ -53,6 +53,10 @@ import io.lakefs.clients.sdk.JSON;
  */
 @javax.annotation.Generated(value = "org.openapitools.codegen.languages.JavaClientCodegen")
 public class ObjectStats {
+  public static final String SERIALIZED_NAME_STORAGE_ID = "storage_id";
+  @SerializedName(SERIALIZED_NAME_STORAGE_ID)
+  private String storageId;
+
   public static final String SERIALIZED_NAME_PATH = "path";
   @SerializedName(SERIALIZED_NAME_PATH)
   private String path;
@@ -138,6 +142,27 @@ public class ObjectStats {
 
   public ObjectStats() {
   }
+
+  public ObjectStats storageId(String storageId) {
+    
+    this.storageId = storageId;
+    return this;
+  }
+
+   /**
+   * Effective configured backend for this object. Omitted for common-prefix entries and legacy single-store configurations.
+   * @return storageId
+  **/
+  @javax.annotation.Nullable
+  public String getStorageId() {
+    return storageId;
+  }
+
+
+  public void setStorageId(String storageId) {
+    this.storageId = storageId;
+  }
+
 
   public ObjectStats path(String path) {
     
@@ -390,7 +415,8 @@ public class ObjectStats {
       return false;
     }
     ObjectStats objectStats = (ObjectStats) o;
-    return Objects.equals(this.path, objectStats.path) &&
+    return Objects.equals(this.storageId, objectStats.storageId) &&
+        Objects.equals(this.path, objectStats.path) &&
         Objects.equals(this.pathType, objectStats.pathType) &&
         Objects.equals(this.physicalAddress, objectStats.physicalAddress) &&
         Objects.equals(this.physicalAddressExpiry, objectStats.physicalAddressExpiry) &&
@@ -404,13 +430,14 @@ public class ObjectStats {
 
   @Override
   public int hashCode() {
-    return Objects.hash(path, pathType, physicalAddress, physicalAddressExpiry, checksum, sizeBytes, mtime, metadata, contentType, additionalProperties);
+    return Objects.hash(storageId, path, pathType, physicalAddress, physicalAddressExpiry, checksum, sizeBytes, mtime, metadata, contentType, additionalProperties);
   }
 
   @Override
   public String toString() {
     StringBuilder sb = new StringBuilder();
     sb.append("class ObjectStats {\n");
+    sb.append("    storageId: ").append(toIndentedString(storageId)).append("\n");
     sb.append("    path: ").append(toIndentedString(path)).append("\n");
     sb.append("    pathType: ").append(toIndentedString(pathType)).append("\n");
     sb.append("    physicalAddress: ").append(toIndentedString(physicalAddress)).append("\n");
@@ -443,6 +470,7 @@ public class ObjectStats {
   static {
     // a set of all properties/fields (JSON key names)
     openapiFields = new HashSet<String>();
+    openapiFields.add("storage_id");
     openapiFields.add("path");
     openapiFields.add("path_type");
     openapiFields.add("physical_address");
@@ -482,6 +510,9 @@ public class ObjectStats {
         }
       }
         JsonObject jsonObj = jsonElement.getAsJsonObject();
+      if ((jsonObj.get("storage_id") != null && !jsonObj.get("storage_id").isJsonNull()) && !jsonObj.get("storage_id").isJsonPrimitive()) {
+        throw new IllegalArgumentException(String.format("Expected the field `storage_id` to be a primitive type in the JSON string but got `%s`", jsonObj.get("storage_id").toString()));
+      }
       if (!jsonObj.get("path").isJsonPrimitive()) {
         throw new IllegalArgumentException(String.format("Expected the field `path` to be a primitive type in the JSON string but got `%s`", jsonObj.get("path").toString()));
       }

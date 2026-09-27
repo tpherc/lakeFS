@@ -13,6 +13,9 @@ use crate::models;
 /// StagingLocation : location for placing an object when staging it
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StagingLocation {
+    /// Configured backend containing the object. Staging allocation returns the repository backend; omitted or empty on link uses the repository backend.
+    #[serde(rename = "storage_id", skip_serializing_if = "Option::is_none")]
+    pub storage_id: Option<String>,
     #[serde(rename = "physical_address", skip_serializing_if = "Option::is_none")]
     pub physical_address: Option<String>,
     /// if presign=true is passed in the request, this field will contain a pre-signed URL to use when uploading
@@ -27,6 +30,7 @@ impl StagingLocation {
     /// location for placing an object when staging it
     pub fn new() -> StagingLocation {
         StagingLocation {
+            storage_id: None,
             physical_address: None,
             presigned_url: None,
             presigned_url_expiry: None,

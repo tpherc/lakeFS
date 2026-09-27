@@ -10,7 +10,7 @@ import { InfoIcon } from '@primer/octicons-react';
 import { useConfigContext } from '../../hooks/configProvider';
 import { AppContext } from '../../hooks/appContext';
 import { useRefs } from '../../hooks/repo';
-import { getRepoStorageConfig } from '../../../pages/repositories/repository/utils';
+import { getObjectStorageConfig } from '../../../pages/repositories/repository/utils';
 
 const maxDiffSizeBytes = 120 << 10;
 const supportedReadableFormats = [
@@ -32,35 +32,26 @@ export const ObjectsDiff = ({ diffType, repoId, leftRef, rightRef, path }) => {
     const { state } = useContext(AppContext);
     const { repo, error: repoError, loading: repoLoading } = useRefs();
     const { config, error: configsError, loading: configLoading } = useConfigContext();
-    const { storageConfig, error: storageConfigError } = getRepoStorageConfig(config?.storages, repo);
     const hooksLoading = repoLoading || configLoading;
-    const hooksError = hooksLoading ? null : repoError || configsError || storageConfigError;
+    const hooksError = hooksLoading ? null : repoError || configsError;
 
+    const hasLeft = ['changed', 'conflict', 'removed'].includes(diffType);
+    const hasRight = ['changed', 'conflict', 'added'].includes(diffType);
+    const left = useAPI(
+        () => (hasLeft ? objects.getStat(repoId, leftRef, path) : Promise.resolve(null)),
+        [repoId, leftRef, path, hasLeft],
+    );
+    const right = useAPI(
+        () => (hasRight ? objects.getStat(repoId, rightRef, path) : Promise.resolve(null)),
+        [repoId, rightRef, path, hasRight],
+    );
     if (hooksError) return <AlertError error={hooksError} />;
-
-    const readable = readableObject(path);
-    let left;
-    let right;
-    switch (diffType) {
-        case 'changed':
-        case 'conflict':
-            left = useAPI(async () => objects.getStat(repoId, leftRef, path), [repoId, leftRef, path]);
-            right = useAPI(async () => objects.getStat(repoId, rightRef, path), [repoId, rightRef, path]);
-            break;
-        case 'added':
-            right = useAPI(async () => objects.getStat(repoId, rightRef, path), [repoId, rightRef, path]);
-            break;
-        case 'removed':
-            left = useAPI(async () => objects.getStat(repoId, leftRef, path), [repoId, leftRef, path]);
-            break;
-        default:
-            return <AlertError error={'Unsupported diff type ' + diffType} />;
-    }
-
-    if (hooksLoading || (left && left.loading) || (right && right.loading)) return <Loading />;
-    const err = (left && left.error) || (right && right.err);
+    if (!hasLeft && !hasRight) return <AlertError error={'Unsupported diff type ' + diffType} />;
+    if (hooksLoading || left.loading || right.loading) return <Loading />;
+    const err = left.error || right.error;
     if (err) return <AlertError error={err} />;
 
+    const readable = readableObject(path);
     const leftStat = left && left.response;
     const rightStat = right && right.response;
     if (!readable) {
@@ -85,11 +76,12 @@ export const ObjectsDiff = ({ diffType, repoId, leftRef, rightRef, path }) => {
     const rightSize = rightStat && rightStat.size_bytes;
     return (
         <ContentDiff
-            config={storageConfig}
+            leftPresign={getObjectStorageConfig(config?.storages, repo, leftStat)?.pre_sign_support_ui ?? false}
+            rightPresign={getObjectStorageConfig(config?.storages, repo, rightStat)?.pre_sign_support_ui ?? false}
             repoId={repoId}
             path={path}
-            leftRef={left && leftRef}
-            rightRef={right && rightRef}
+            leftRef={hasLeft ? leftRef : null}
+            rightRef={hasRight ? rightRef : null}
             leftSize={leftSize}
             rightSize={rightSize}
             diffType={diffType}
@@ -125,10 +117,22 @@ const NoContentDiff = ({ left, right, diffType }) => {
     );
 };
 
-const ContentDiff = ({ config, repoId, path, leftRef, rightRef, leftSize, rightSize, diffType, settings }) =>
+const ContentDiff = ({
+    leftPresign,
+    rightPresign,
+    repoId,
+    path,
+    leftRef,
+    rightRef,
+    leftSize,
+    rightSize,
+    diffType,
+    settings,
+}) =>
     isImage(path) ? (
         <ImageCardDiff
-            config={config}
+            leftPresign={leftPresign}
+            rightPresign={rightPresign}
             repoId={repoId}
             path={path}
             leftRef={leftRef}
@@ -139,7 +143,8 @@ const ContentDiff = ({ config, repoId, path, leftRef, rightRef, leftSize, rightS
         />
     ) : (
         <TextDiff
-            config={config}
+            leftPresign={leftPresign}
+            rightPresign={rightPresign}
             repoId={repoId}
             path={path}
             leftRef={leftRef}
@@ -151,17 +156,26 @@ const ContentDiff = ({ config, repoId, path, leftRef, rightRef, leftSize, rightS
         />
     );
 
-const TextDiff = ({ config, repoId, path, leftRef, rightRef, leftSize, rightSize, diffType, isDarkMode }) => {
-    const left =
-        leftRef &&
-        // TODO: Review and remove this eslint-disable once dependencies are validated
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        useAPI(async () => objects.get(repoId, leftRef, path, config.pre_sign_support_ui), [repoId, leftRef, path]);
-    const right =
-        rightRef &&
-        // TODO: Review and remove this eslint-disable once dependencies are validated
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        useAPI(async () => objects.get(repoId, rightRef, path, config.pre_sign_support_ui), [repoId, rightRef, path]);
+const TextDiff = ({
+    leftPresign,
+    rightPresign,
+    repoId,
+    path,
+    leftRef,
+    rightRef,
+    leftSize,
+    rightSize,
+    diffType,
+    isDarkMode,
+}) => {
+    const left = useAPI(
+        () => (leftRef ? objects.get(repoId, leftRef, path, leftPresign) : Promise.resolve(null)),
+        [repoId, leftRef, path, leftPresign],
+    );
+    const right = useAPI(
+        () => (rightRef ? objects.get(repoId, rightRef, path, rightPresign) : Promise.resolve(null)),
+        [repoId, rightRef, path, rightPresign],
+    );
 
     if ((left && left.loading) || (right && right.loading)) return <Loading />;
     const err = (left && left.error) || (right && right.error);
@@ -181,10 +195,19 @@ const TextDiff = ({ config, repoId, path, leftRef, rightRef, leftSize, rightSize
     );
 };
 
-const ImageCardDiff = ({ config, repoId, path, leftRef, rightRef, leftSize, rightSize, diffType }) => {
-    const query = qs({ path, presign: config.pre_sign_support_ui });
-    const oldUrl = leftRef && buildUrl(repoId, leftRef, query);
-    const newUrl = rightRef && buildUrl(repoId, rightRef, query);
+const ImageCardDiff = ({
+    leftPresign,
+    rightPresign,
+    repoId,
+    path,
+    leftRef,
+    rightRef,
+    leftSize,
+    rightSize,
+    diffType,
+}) => {
+    const oldUrl = leftRef && buildUrl(repoId, leftRef, qs({ path, presign: leftPresign }));
+    const newUrl = rightRef && buildUrl(repoId, rightRef, qs({ path, presign: rightPresign }));
 
     return (
         <div>

@@ -32,13 +32,14 @@ var importCmd = &cobra.Command{
 		flags := cmd.Flags()
 		noProgress := Must(flags.GetBool("no-progress"))
 		from := Must(flags.GetString("from"))
+		storageID := Must(flags.GetString(storageIDFlagName))
 		to := Must(flags.GetString("to"))
 		toURI := MustParsePathURI("lakeFS path URI", to)
 		message, metadata := getCommitFlags(cmd)
 
 		ctx := cmd.Context()
 		client := getClient()
-		verifySourceMatchConfiguredStorage(ctx, client, toURI.Repository, from)
+		verifySourceMatchConfiguredStorage(ctx, client, toURI.Repository, from, storageID)
 
 		// verify target branch exists before we try to create and import into the associated imported branch
 		if err, ok := branchExists(ctx, client, toURI.Repository, toURI.Ref); err != nil {
@@ -56,6 +57,7 @@ var importCmd = &cobra.Command{
 			Paths: []apigen.ImportLocation{
 				{
 					Destination: apiutil.Value(toURI.Path),
+					StorageId:   &storageID,
 					Path:        from,
 					Type:        "common_prefix",
 				},
@@ -157,14 +159,14 @@ func newImportProgressBar(visible bool) *progressbar.ProgressBar {
 	return bar
 }
 
-func verifySourceMatchConfiguredStorage(ctx context.Context, client *apigen.ClientWithResponses, repositoryID string, source string) {
+func verifySourceMatchConfiguredStorage(ctx context.Context, client *apigen.ClientWithResponses, repositoryID string, source string, storageID string) {
 	// Adds backwards compatibility for ADLS Gen2 storage import `hint`
 	if strings.Contains(source, "adls.core.windows.net") {
 		source = strings.Replace(source, "adls.core.windows.net", "blob.core.windows.net", 1)
 		Warning(fmt.Sprintf("'adls' hint is deprecated\n Using %s", source))
 	}
 
-	storageConfig := getStorageConfigOrDie(ctx, client, repositoryID)
+	storageConfig := getSelectedStorageConfigOrDie(ctx, client, repositoryID, storageID)
 	if storageConfig.ImportValidityRegex == "" {
 		return
 	}
@@ -193,6 +195,7 @@ func branchExists(ctx context.Context, client *apigen.ClientWithResponses, repos
 
 //nolint:gochecknoinits
 func init() {
+	withSourceStorageID(importCmd)
 	importCmd.Flags().String("from", "", "prefix to read from (e.g. \"s3://bucket/sub/path/\"). must not be in a storage namespace")
 	_ = importCmd.MarkFlagRequired("from")
 	importCmd.Flags().String("to", "", "lakeFS path to load objects into (e.g. \"lakefs://repo/branch/sub/path/\")")

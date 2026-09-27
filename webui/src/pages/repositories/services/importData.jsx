@@ -3,7 +3,7 @@ import Row from 'react-bootstrap/Row';
 import InputGroup from 'react-bootstrap/InputGroup';
 import Col from 'react-bootstrap/Col';
 import { LinearProgress } from '@mui/material';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Button from 'react-bootstrap/Button';
 import Alert from 'react-bootstrap/Alert';
 import Form from 'react-bootstrap/Form';
@@ -16,8 +16,8 @@ const ImportPhase = {
     Failed: 3,
 };
 
-const startImport = async (setImportID, prependPath, commitMsg, sourceRef, repoId, refId, metadata = {}) => {
-    const response = await imports.create(repoId, refId, sourceRef, prependPath, commitMsg, metadata);
+const startImport = async (setImportID, prependPath, commitMsg, sourceRef, repoId, refId, metadata = {}, storageID) => {
+    const response = await imports.create(repoId, refId, sourceRef, prependPath, commitMsg, metadata, storageID);
     setImportID(response.id);
 };
 
@@ -95,6 +95,9 @@ const ExecuteImportButton = ({ isEnabled, importPhase, importFunc, doneFunc }) =
 
 const ImportForm = ({
     config,
+    storageConfigs,
+    sourceStorageID = '',
+    onSourceStorageChange,
     pathStyle,
     sourceRef,
     destRef,
@@ -108,20 +111,13 @@ const ImportForm = ({
     err = null,
     ...rest
 }) => {
-    const [isSourceValid, setIsSourceValid] = useState(true);
-    const importValidityRegexStr = config.import_validity_regex;
-    const storageNamespaceValidityRegex = RegExp(importValidityRegexStr);
-    const updateSourceURLValidity = () => {
-        if (!sourceRef.current.value) {
-            updateSrcValidity(true);
-            setIsSourceValid(true);
-            return;
-        }
-        const isValid = storageNamespaceValidityRegex.test(sourceRef.current.value);
-        updateSrcValidity(isValid);
-        setIsSourceValid(isValid);
-    };
-    const sourceURIExample = config ? config.blockstore_namespace_example : 's3://my-bucket/path/';
+    const [source, setSource] = useState('');
+    const importValidityRegexStr = config?.import_validity_regex ?? '';
+    const isSourceValid = Boolean(config?.import_support && source && RegExp(importValidityRegexStr).test(source));
+    useEffect(() => {
+        updateSrcValidity(isSourceValid);
+    }, [isSourceValid, updateSrcValidity]);
+    const sourceURIExample = config?.blockstore_namespace_example ?? '';
     return (
         <div {...rest}>
             <Alert variant="info">
@@ -133,6 +129,26 @@ const ImportForm = ({
                 </a>
             </Alert>
             <Form>
+                {storageConfigs?.length > 1 && onSourceStorageChange && (
+                    <Form.Group controlId="import-source-storage">
+                        <Form.Label>Source backend</Form.Label>
+                        <Form.Select
+                            value={sourceStorageID}
+                            onChange={(event) => onSourceStorageChange(event.target.value)}
+                        >
+                            <option value="">Repository backend</option>
+                            {storageConfigs.map((storage) => (
+                                <option
+                                    key={storage.blockstore_id}
+                                    value={storage.blockstore_id}
+                                    disabled={!storage.import_support}
+                                >
+                                    {storage.blockstore_description || storage.blockstore_id}
+                                </option>
+                            ))}
+                        </Form.Select>
+                    </Form.Group>
+                )}
                 <Form.Group className="mt-4 form-group">
                     <Form.Label>Import from</Form.Label>
                     <Form.Control
@@ -142,9 +158,10 @@ const ImportForm = ({
                         ref={sourceRef}
                         autoFocus
                         placeholder={sourceURIExample}
-                        onChange={updateSourceURLValidity}
+                        value={source}
+                        onChange={(event) => setSource(event.target.value)}
                     />
-                    {isSourceValid === false && (
+                    {source && !isSourceValid && (
                         <Form.Text className="text-danger">
                             {`Import source should match the following pattern: "${importValidityRegexStr}"`}
                         </Form.Text>
