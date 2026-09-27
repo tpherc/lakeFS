@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ClockIcon, DiffAddedIcon, DiffIgnoredIcon, DiffModifiedIcon, DiffRemovedIcon } from '@primer/octicons-react';
-import { OverlayTrigger, Tooltip } from 'react-bootstrap';
+import { Tooltip, TooltipTrigger } from '../tooltips';
 import { humanSize } from './tree';
 
 const MAX_NUM_OBJECTS = 10_000;
@@ -83,7 +83,7 @@ export default ({ prefix, getMore }) => {
     if (loading || !resultsState || !resultsState.results) return <ClockIcon />;
     if (resultsState.results && resultsState.results.length >= MAX_NUM_OBJECTS && !pullMore) {
         return (
-            <OverlayTrigger
+            <TooltipTrigger
                 placement="bottom"
                 overlay={
                     <Tooltip>
@@ -99,7 +99,7 @@ export default ({ prefix, getMore }) => {
                         load more?
                     </a>
                 </small>
-            </OverlayTrigger>
+            </TooltipTrigger>
         );
     }
     const summaryData = resultsState.results.reduce((prev, current) => {
@@ -139,7 +139,7 @@ export default ({ prefix, getMore }) => {
         </Tooltip>
     );
     return (
-        <OverlayTrigger placement="left" overlay={detailsTooltip}>
+        <TooltipTrigger placement="left" overlay={detailsTooltip}>
             <div className={'m-1 small float-end'}>
                 {summaryData.added.count > 0 && (
                     <span className={'color-fg-added'}>
@@ -166,6 +166,6 @@ export default ({ prefix, getMore }) => {
                     </span>
                 )}
             </div>
-        </OverlayTrigger>
+        </TooltipTrigger>
     );
 };

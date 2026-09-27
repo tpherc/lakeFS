@@ -4,10 +4,8 @@ import dayjs from 'dayjs';
 import Form from 'react-bootstrap/Form';
 import Alert from 'react-bootstrap/Alert';
 import Button from 'react-bootstrap/Button';
-import Tooltip from 'react-bootstrap/Tooltip';
-import Overlay from 'react-bootstrap/Overlay';
 import Table from 'react-bootstrap/Table';
-import { OverlayTrigger } from 'react-bootstrap';
+import { Tooltip, TooltipOverlay, TooltipTrigger } from './tooltips';
 import { CheckIcon, PasteIcon, SearchIcon, SyncIcon, AlertIcon, AlertFillIcon } from '@primer/octicons-react';
 import { Link } from './nav';
 import {
@@ -115,9 +113,9 @@ export const FormattedDate = ({ dateValue, format = 'MM/DD/YYYY HH:mm:ss' }) => 
     }
 
     return (
-        <OverlayTrigger placement="bottom" overlay={<Tooltip>{dateValue}</Tooltip>}>
+        <TooltipTrigger placement="bottom" overlay={<Tooltip>{dateValue}</Tooltip>}>
             <span>{dayjs(dateValue).format(format)}</span>
-        </OverlayTrigger>
+        </TooltipTrigger>
     );
 };
 
@@ -245,11 +243,11 @@ export const LinkButton = ({ href, children, buttonVariant, tooltip = null }) =>
 
 export const TooltipButton = ({ onClick, variant, children, tooltip, className = '', size = 'sm' }) => {
     return (
-        <OverlayTrigger placement="bottom" overlay={<Tooltip>{tooltip}</Tooltip>}>
+        <TooltipTrigger placement="bottom" overlay={<Tooltip>{tooltip}</Tooltip>}>
             <Button variant={variant} onClick={onClick} className={className} size={size}>
                 {children}
             </Button>
-        </OverlayTrigger>
+        </TooltipTrigger>
     );
 };
 
@@ -272,13 +270,12 @@ export const ClipboardButton = ({
 
     return (
         <>
-            <Overlay placement="bottom" show={show || isHovered} target={target.current}>
+            <TooltipOverlay placement="bottom" show={show || isHovered} target={target.current}>
                 {(props) => {
                     updater = props.popper && props.popper.scheduleUpdate;
-                    props.show = undefined;
                     return <Tooltip {...props}>{tooltip}</Tooltip>;
                 }}
-            </Overlay>
+            </TooltipOverlay>
             <Button
                 variant={variant}
                 ref={target}
@@ -345,11 +342,11 @@ export const PrefixSearchWidget = ({ onFilter, text = 'Search by Prefix', defaul
     }
 
     return (
-        <OverlayTrigger placement="bottom" overlay={<Tooltip>{text}</Tooltip>}>
+        <TooltipTrigger placement="bottom" overlay={<Tooltip>{text}</Tooltip>}>
             <Button variant="light" onClick={toggle}>
                 <SearchIcon />
             </Button>
-        </OverlayTrigger>
+        </TooltipTrigger>
     );
 };
 
@@ -517,9 +514,9 @@ export const ExitConfirmationDialog = ({ dialogAlert, dialogDescription, onExit,
 export const ExperimentalOverlayTooltip = ({ children, show = true, placement = 'auto' }) => {
     const experimentalTooltip = () => <Tooltip id="button-tooltip">Experimental</Tooltip>;
     return show ? (
-        <OverlayTrigger placement={placement} overlay={experimentalTooltip()}>
+        <TooltipTrigger placement={placement} overlay={experimentalTooltip()}>
             {children}
-        </OverlayTrigger>
+        </TooltipTrigger>
     ) : (
         <></>
     );

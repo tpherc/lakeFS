@@ -1,7 +1,6 @@
 import React from 'react';
 
-import OverlayTrigger from 'react-bootstrap/OverlayTrigger';
-import Tooltip from 'react-bootstrap/Tooltip';
+import { Tooltip, TooltipTrigger } from '../tooltips';
 import { CheckCircleFillIcon, StopwatchIcon, XCircleFillIcon, SkipIcon } from '@primer/octicons-react';
 
 export const ActionStatusIcon = ({ status, className = null }) => {
@@ -15,8 +14,8 @@ export const ActionStatusIcon = ({ status, className = null }) => {
     }
     // otherwise, probably still running
     return (
-        <OverlayTrigger placement="bottom" overlay={<Tooltip>{status}</Tooltip>}>
+        <TooltipTrigger placement="bottom" overlay={<Tooltip>{status}</Tooltip>}>
             <span className={className}>{icon}</span>
-        </OverlayTrigger>
+        </TooltipTrigger>
     );
 };

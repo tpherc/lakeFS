@@ -2,8 +2,7 @@ import React, { useCallback } from 'react';
 import { useRouter } from '../../hooks/router';
 import RefDropdown from './refDropdown';
 import { ArrowLeftIcon, ArrowSwitchIcon } from '@primer/octicons-react';
-import OverlayTrigger from 'react-bootstrap/OverlayTrigger';
-import Tooltip from 'react-bootstrap/Tooltip';
+import { Tooltip, TooltipTrigger } from '../tooltips';
 import Button from 'react-bootstrap/Button';
 
 const CompareBranchesSelection = ({
@@ -69,13 +68,13 @@ const CompareBranchesSelection = ({
                 narrow
             />
 
-            <OverlayTrigger placement="bottom" overlay={<Tooltip>Switch directions</Tooltip>}>
+            <TooltipTrigger placement="bottom" overlay={<Tooltip>Switch directions</Tooltip>}>
                 <span>
                     <Button variant={'link'} onClick={handleSwitchRefs}>
                         <ArrowSwitchIcon className="me-2 mt-2" size="small" verticalAlign="middle" />
                     </Button>
                 </span>
-            </OverlayTrigger>
+            </TooltipTrigger>
         </>
     );
 };

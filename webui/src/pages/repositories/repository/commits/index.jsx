@@ -5,8 +5,7 @@ import { BrowserIcon, HistoryIcon, LinkIcon, PlayIcon, TagIcon } from '@primer/o
 
 import { commits, tags, MAX_LISTING_AMOUNT } from '../../../../lib/api';
 import Badge from 'react-bootstrap/Badge';
-import OverlayTrigger from 'react-bootstrap/OverlayTrigger';
-import Tooltip from 'react-bootstrap/Tooltip';
+import { Tooltip, TooltipTrigger } from '../../../../lib/components/tooltips';
 import Button from 'react-bootstrap/Button';
 import ButtonGroup from 'react-bootstrap/ButtonGroup';
 import Card from 'react-bootstrap/Card';
@@ -282,7 +281,7 @@ const CommitsBrowser = ({ repo, reference, after, onPaginate, onSelectRef }) => 
             {tagsError && <AlertError error={tagsError} onDismiss={() => setTagsError(null)} className="mt-3" />}
 
             {tagsLimitExceeded && (
-                <OverlayTrigger
+                <TooltipTrigger
                     placement="right"
                     overlay={
                         <Tooltip>Too many tags to display ({MAX_TAGS_FOR_DISPLAY.toLocaleString()}+ limit)</Tooltip>
@@ -291,7 +290,7 @@ const CommitsBrowser = ({ repo, reference, after, onPaginate, onSelectRef }) => 
                     <small className="text-muted d-inline-block mb-2" style={{ cursor: 'help' }}>
                         <TagIcon /> Tag labels hidden
                     </small>
-                </OverlayTrigger>
+                </TooltipTrigger>
             )}
 
             <Card>

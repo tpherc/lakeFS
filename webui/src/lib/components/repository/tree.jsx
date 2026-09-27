@@ -17,10 +17,9 @@ import {
     BeakerIcon,
     TerminalIcon,
 } from '@primer/octicons-react';
-import Tooltip from 'react-bootstrap/Tooltip';
+import { Tooltip, TooltipTrigger } from '../tooltips';
 import Table from 'react-bootstrap/Table';
 import Card from 'react-bootstrap/Card';
-import OverlayTrigger from 'react-bootstrap/OverlayTrigger';
 import Button from 'react-bootstrap/Button';
 import ButtonGroup from 'react-bootstrap/ButtonGroup';
 import Container from 'react-bootstrap/Container';
@@ -510,9 +509,9 @@ const EntryRow = ({ repo, reference, path, entry, onDelete, showActions }) => {
         size = <Na />;
     } else {
         size = (
-            <OverlayTrigger placement="bottom" overlay={<Tooltip>{entry.size_bytes} bytes</Tooltip>}>
+            <TooltipTrigger placement="bottom" overlay={<Tooltip>{entry.size_bytes} bytes</Tooltip>}>
                 <span>{humanSize(entry.size_bytes)}</span>
-            </OverlayTrigger>
+            </TooltipTrigger>
         );
     }
 
@@ -521,12 +520,12 @@ const EntryRow = ({ repo, reference, path, entry, onDelete, showActions }) => {
         modified = <Na />;
     } else {
         modified = (
-            <OverlayTrigger
+            <TooltipTrigger
                 placement="bottom"
                 overlay={<Tooltip>{dayjs.unix(entry.mtime).format('MM/DD/YYYY HH:mm:ss')}</Tooltip>}
             >
                 <span>{dayjs.unix(entry.mtime).fromNow()}</span>
-            </OverlayTrigger>
+            </TooltipTrigger>
         );
     }
 
@@ -534,29 +533,29 @@ const EntryRow = ({ repo, reference, path, entry, onDelete, showActions }) => {
     switch (entry.diff_type) {
         case 'removed':
             diffIndicator = (
-                <OverlayTrigger placement="bottom" overlay={<Tooltip>removed</Tooltip>}>
+                <TooltipTrigger placement="bottom" overlay={<Tooltip>removed</Tooltip>}>
                     <span>
                         <TrashIcon />
                     </span>
-                </OverlayTrigger>
+                </TooltipTrigger>
             );
             break;
         case 'added':
             diffIndicator = (
-                <OverlayTrigger placement="bottom" overlay={<Tooltip>added</Tooltip>}>
+                <TooltipTrigger placement="bottom" overlay={<Tooltip>added</Tooltip>}>
                     <span>
                         <PlusIcon />
                     </span>
-                </OverlayTrigger>
+                </TooltipTrigger>
             );
             break;
         case 'changed':
             diffIndicator = (
-                <OverlayTrigger placement="bottom" overlay={<Tooltip>changed</Tooltip>}>
+                <TooltipTrigger placement="bottom" overlay={<Tooltip>changed</Tooltip>}>
                     <span>
                         <PencilIcon />
                     </span>
-                </OverlayTrigger>
+                </TooltipTrigger>
             );
             break;
         default:
