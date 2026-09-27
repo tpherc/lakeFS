@@ -628,14 +628,20 @@ func ValidatePolicy(policy *model.Policy) error {
 				return err
 			}
 		}
-		if err := model.ValidateArn(stmt.Resource); err != nil {
+		resources, err := auth.ParsePolicyResourceAsList(stmt.Resource)
+		if err != nil {
 			return err
+		}
+		for _, resource := range resources {
+			if err := model.ValidateArn(resource); err != nil {
+				return err
+			}
 		}
 		if err := model.ValidateStatementEffect(stmt.Effect); err != nil {
 			return err
 		}
 	}
-	return nil
+	return auth.ValidatePolicyTemplates(policy)
 }
 
 func (s *AuthService) WritePolicy(ctx context.Context, policy *model.Policy, update bool) error {
@@ -895,15 +901,12 @@ func (s *AuthService) GetCredentials(ctx context.Context, accessKeyID string) (*
 }
 
 func (s *AuthService) Authorize(ctx context.Context, req *auth.AuthorizationRequest) (*auth.AuthorizationResponse, error) {
-	policies, _, err := s.ListEffectivePolicies(ctx, req.Username, &model.PaginationParams{
-		After:  "", // all
-		Amount: -1, // all
-	})
+	policies, err := auth.AuthorizationPolicies(ctx, req, s.ListEffectivePolicies)
 	if err != nil {
 		return nil, err
 	}
 	permAudit := &auth.MissingPermissions{}
-	allowed := auth.CheckPermissions(ctx, req.RequiredPermissions, req.Username, policies, permAudit)
+	allowed := auth.CheckRequestPermissions(ctx, req, policies, permAudit)
 
 	if allowed != auth.CheckAllow {
 		return &auth.AuthorizationResponse{

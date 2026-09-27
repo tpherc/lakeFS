@@ -3,6 +3,8 @@ package auth_test
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/treeverse/lakefs/pkg/auth"
 	"github.com/treeverse/lakefs/pkg/auth/model"
 )
@@ -396,7 +398,7 @@ func TestCheckPermission(t *testing.T) {
 			want:   false,
 		},
 		{
-			name:        "statements with conditions are skipped",
+			name:        "missing condition field does not match",
 			resourceArn: "arn:lakefs:fs:::repository/repo1",
 			username:    "user1",
 			policies: []*model.Policy{{
@@ -408,7 +410,7 @@ func TestCheckPermission(t *testing.T) {
 				}},
 			}},
 			action: "fs:ListRepositories",
-			want:   false, // Skipped because of condition
+			want:   false,
 		},
 		{
 			name:        "non-repository resource - branch ARN",
@@ -428,7 +430,8 @@ func TestCheckPermission(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := auth.CheckPermission(tt.resourceArn, tt.username, tt.policies, tt.action, nil)
+			got, err := auth.CheckPermission(tt.resourceArn, tt.username, tt.policies, tt.action, auth.NewConditionContext(""))
+			require.NoError(t, err)
 			if got != tt.want {
 				t.Errorf("CheckPermission() = %v, want %v", got, tt.want)
 			}
@@ -444,6 +447,7 @@ func TestCheckPermissionWithConditions(t *testing.T) {
 		policies     []*model.Policy
 		action       string
 		conditionCtx *auth.ConditionContext
+		wantErr      error
 		want         bool
 	}{
 		{
@@ -479,7 +483,7 @@ func TestCheckPermissionWithConditions(t *testing.T) {
 			want:         false,
 		},
 		{
-			name:        "condition with nil context skips statement",
+			name:        "condition with nil context fails closed",
 			resourceArn: "arn:lakefs:catalog:::namespace/my-repo/my-ns",
 			username:    "user1",
 			policies: []*model.Policy{{
@@ -492,6 +496,7 @@ func TestCheckPermissionWithConditions(t *testing.T) {
 			}},
 			action:       "catalog:ListTables",
 			conditionCtx: nil,
+			wantErr:      auth.ErrInvalidConditionContext,
 			want:         false,
 		},
 		{
@@ -559,10 +564,35 @@ func TestCheckPermissionWithConditions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := auth.CheckPermission(tt.resourceArn, tt.username, tt.policies, tt.action, tt.conditionCtx)
+			got, err := auth.CheckPermission(tt.resourceArn, tt.username, tt.policies, tt.action, tt.conditionCtx)
+			require.ErrorIs(t, err, tt.wantErr)
 			if got != tt.want {
 				t.Errorf("CheckPermission() = %v, want %v", got, tt.want)
 			}
+		})
+	}
+}
+
+func TestCheckPermission_EvaluationErrors(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		resource  string
+		condition map[string]map[string][]string
+	}{
+		{name: "malformed resource", resource: `["invalid",]`},
+		{name: "malformed resource with false condition", resource: `["invalid",]`, condition: map[string]map[string][]string{"StringLike": {"missing": {"value"}}}},
+		{name: "unsupported operator", resource: "*", condition: map[string]map[string][]string{"Unsupported": {"SourceIp": {"127.0.0.1"}}}},
+		{name: "invalid operand", resource: "*", condition: map[string]map[string][]string{"IpAddress": {"SourceIp": {"invalid"}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policies := []*model.Policy{{Statement: model.Statements{
+				{Effect: model.StatementEffectAllow, Action: []string{"fs:*"}, Resource: "*"},
+				{Effect: model.StatementEffectDeny, Action: []string{"fs:*"}, Resource: tc.resource, Condition: tc.condition},
+			}}}
+			allowed, err := auth.CheckPermission("arn:lakefs:fs:::repository/repo", "user", policies, "fs:ListRepositories", auth.NewConditionContext("127.0.0.1"))
+			require.Error(t, err)
+			require.False(t, allowed)
 		})
 	}
 }

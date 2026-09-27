@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/treeverse/lakefs/pkg/auth/model"
 	oidcencoding "github.com/treeverse/lakefs/pkg/auth/oidc/encoding"
+	"github.com/treeverse/lakefs/pkg/auth/oidc/principaltags"
 	"github.com/treeverse/lakefs/pkg/logging"
 )
 
@@ -26,7 +27,7 @@ const (
 
 	oidcClaimsSchemaVersionSessionKey = "_lakefs_oidc_claims_schema_version"
 	oidcClaimsExpiresAtSessionKey     = "_lakefs_oidc_claims_expires_at"
-	currentOIDCClaimsSchemaVersion    = 2
+	currentOIDCClaimsSchemaVersion    = 3
 	oidcAuthSource                    = "oidc"
 	defaultSAMLAuthSource             = "saml"
 )
@@ -112,7 +113,21 @@ func UserFromSAMLSession(ctx context.Context, logger logging.Logger, provisioner
 	}, options)
 }
 
+// OIDCSessionAuthentication is the user and validated attributes from one session.
+type OIDCSessionAuthentication struct {
+	User          *model.User
+	PrincipalTags principaltags.Tags
+}
+
 func UserFromOIDCSession(ctx context.Context, logger logging.Logger, provisioner *ExternalIdentityProvisioner, authSession *sessions.Session, oidcConfig *OIDCConfig) (*model.User, error) {
+	authentication, err := AuthenticateOIDCSession(ctx, logger, provisioner, authSession, oidcConfig)
+	if err != nil || authentication == nil {
+		return nil, err
+	}
+	return authentication.User, nil
+}
+
+func AuthenticateOIDCSession(ctx context.Context, logger logging.Logger, provisioner *ExternalIdentityProvisioner, authSession *sessions.Session, oidcConfig *OIDCConfig) (*OIDCSessionAuthentication, error) {
 	idTokenClaims, found, err := oidcClaimsFromSession(authSession, time.Now())
 	if !found {
 		return nil, nil
@@ -121,7 +136,15 @@ func UserFromOIDCSession(ctx context.Context, logger logging.Logger, provisioner
 		logger.WithError(err).Debug("failed decoding OIDC token claims")
 		return nil, fmt.Errorf("%w: %w", ErrAuthenticatingRequest, err)
 	}
-	return ResolveOIDCUserFromClaims(ctx, logger, provisioner, idTokenClaims, oidcConfig)
+	tags, err := principaltags.FromNormalizedClaims(idTokenClaims)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid stored PrincipalTags: %w", ErrAuthenticatingRequest, err)
+	}
+	user, err := ResolveOIDCUserFromClaims(ctx, logger, provisioner, idTokenClaims, oidcConfig)
+	if err != nil {
+		return nil, err
+	}
+	return &OIDCSessionAuthentication{User: user, PrincipalTags: tags}, nil
 }
 
 // ResolveOIDCUserFromClaims resolves a previously provisioned OIDC user from

@@ -80,6 +80,9 @@ func TestGetObjectUsesSavedSourceBinding(t *testing.T) {
 				BlockStore: adapter,
 				Incr:       func(string, string, string, string) {},
 			}}, Repository: &catalog.Repository{Name: "repo", StorageID: "home", StorageNamespace: "s3://bucket/home"}}, Reference: "main"}, Path: "object"}
+			entry, err := operation.Catalog.GetEntry(context.Background(), "repo", "main", "object", catalog.GetEntryParams{})
+			require.NoError(t, err)
+			operation.ObjectRead = &ObjectReadSnapshot{Entry: entry}
 			request := httptest.NewRequest(http.MethodGet, "/repo/main/object", nil)
 			if test.rangeHeader != "" {
 				request.Header.Set("Range", test.rangeHeader)

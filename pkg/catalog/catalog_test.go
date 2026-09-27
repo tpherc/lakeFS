@@ -1083,3 +1083,25 @@ func TestEntryCondition(t *testing.T) {
 		})
 	}
 }
+
+func TestCatalog_ListRepositoriesFilterError(t *testing.T) {
+	t.Parallel()
+	filterErr := errors.New("permission evaluation failed")
+	c := &catalog.Catalog{Store: &catalog.FakeGraveler{
+		RepositoryIteratorFactory: catalog.NewFakeRepositoryIteratorFactory([]*graveler.RepositoryRecord{
+			{RepositoryID: "first", Repository: &graveler.Repository{}},
+			{RepositoryID: "second", Repository: &graveler.Repository{}},
+		}),
+	}}
+	repos, hasMore, err := c.ListRepositories(t.Context(), -1, "", "", "", func(opts *catalog.ListRepositoriesOptions) {
+		opts.FilterFunc = func(repoID string) (bool, error) {
+			if repoID == "second" {
+				return false, filterErr
+			}
+			return true, nil
+		}
+	})
+	require.ErrorIs(t, err, filterErr)
+	require.Nil(t, repos, "must not return partial results after authorization fails")
+	require.False(t, hasMore)
+}

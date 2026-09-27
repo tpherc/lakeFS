@@ -2,6 +2,8 @@ package auth
 
 import (
 	"testing"
+
+	"github.com/treeverse/lakefs/pkg/auth/oidc/principaltags"
 )
 
 func TestIpAddressOperators_Evaluate(t *testing.T) {
@@ -531,5 +533,74 @@ func TestNewConditionContextWithFields(t *testing.T) {
 		if ctx.Fields[key] != expectedValue {
 			t.Errorf("Expected %s to be %s, got %s", key, expectedValue, ctx.Fields[key])
 		}
+	}
+}
+
+func TestConditionContext_PrincipalTags(t *testing.T) {
+	t.Parallel()
+	tags := principaltags.Tags{"pol": "NATO", "clr": "S", "nat": "GBR", "Σ": "sigma", "K": "kelvin", "Path/Key": "nested"}
+	cc := NewConditionContextWithFields(map[string]string{"Ordinary": "exact", "aws:PrincipalTag/spoofed": "untrusted"})
+	cc.AddPrincipalTags(tags)
+	tags["clr"] = "mutated"
+	for _, tc := range []struct {
+		key   string
+		want  string
+		found bool
+	}{
+		{"aws:PrincipalTag/pol", "NATO", true},
+		{"AWS:PRINCIPALTAG/CLR", "S", true},
+		{"aws:principaltag/Nat", "GBR", true},
+		{"aws:PrincipalTag/ς", "sigma", true},
+		{"aws:PrincipalTag/k", "kelvin", true},
+		{"aws:PrincipalTag/path/key", "nested", true},
+		{"Ordinary", "exact", true},
+		{"ordinary", "", false},
+		{"aws:PrincipalTag/spoofed", "", false},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			got, found := cc.Lookup(tc.key)
+			if got != tc.want || found != tc.found {
+				t.Fatalf("Lookup(%q) = %q, %v; want %q, %v", tc.key, got, found, tc.want, tc.found)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		operator string
+		key      string
+		value    string
+		want     bool
+	}{
+		{"StringLike", "aws:PrincipalTag/clr", "S", true},
+		{"StringLike", "aws:PrincipalTag/clr", "s", false},
+		{"StringLike", "aws:PrincipalTag/missing", "*", false},
+		{"StringNotLike", "aws:PrincipalTag/missing", "S", false},
+		{"StringNotLike", "aws:PrincipalTag/clr", "S", false},
+		{"StringNotLike", "aws:PrincipalTag/clr", "U", true},
+	} {
+		t.Run(tc.operator+"/"+tc.key+"/"+tc.value, func(t *testing.T) {
+			got, err := EvaluateConditions(map[string]map[string][]string{tc.operator: {tc.key: {tc.value}}}, cc)
+			if err != nil || got != tc.want {
+				t.Fatalf("condition = %v, %v; want %v", got, err, tc.want)
+			}
+		})
+	}
+	cc.AddPrincipalTags(nil)
+	if _, found := cc.Lookup("aws:PrincipalTag/clr"); found {
+		t.Fatal("replacing tags retained old snapshot")
+	}
+}
+
+func TestNewRequestConditionContext(t *testing.T) {
+	t.Parallel()
+	ctx := WithPrincipalTags(t.Context(), principaltags.Tags{"clr": "S"})
+	cc := NewRequestConditionContext(ctx, "192.0.2.1")
+	if value, ok := cc.Lookup("SourceIp"); !ok || value != "192.0.2.1" {
+		t.Fatal("missing client IP")
+	}
+	if value, ok := cc.Lookup("aws:PrincipalTag/clr"); !ok || value != "S" {
+		t.Fatal("missing principal tag")
+	}
+	if len(cc.Fields) != 1 {
+		t.Fatal("principal tags leaked into ordinary fields")
 	}
 }

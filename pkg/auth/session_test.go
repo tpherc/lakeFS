@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
 	"github.com/stretchr/testify/require"
 )
@@ -73,4 +74,47 @@ func TestSessionEncodingUpgradeMarker(t *testing.T) {
 	reissued, err := store.Get(nextReq, InternalAuthSessionName)
 	require.NoError(t, err)
 	require.False(t, SessionNeedsEncodingUpgrade(reissued))
+}
+
+func TestSessionEncodingCannotFallBackToLegacySignedCookie(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	store, err := NewSessionStore(secret, SessionStoreOptions{MaxAge: 3600})
+	require.NoError(t, err)
+	legacyCodec := securecookie.New(secret, nil)
+	req := httptest.NewRequest(http.MethodGet, "https://lakefs.example", nil)
+	session, err := store.Get(req, OIDCAuthSessionName)
+	require.NoError(t, err)
+	PrepareSessionForSave(session)
+
+	// Locate the actual production encrypted-codec boundary, without lowering it.
+	low, high := 0, 4096
+	for low < high {
+		mid := low + (high-low)/2
+		session.Values[IDTokenClaimsSessionKey] = strings.Repeat("x", mid)
+		if ValidateEncryptedCookieSessionEncoding(store, session) == nil {
+			low = mid + 1
+		} else {
+			high = mid
+		}
+	}
+	session.Values[IDTokenClaimsSessionKey] = strings.Repeat("x", low)
+	_, err = legacyCodec.Encode(session.Name(), session.Values)
+	require.NoError(t, err, "the same payload fits the legacy signed-only cookie")
+	require.Error(t, ValidateEncryptedCookieSessionEncoding(store, session))
+	rec := httptest.NewRecorder()
+	require.Error(t, SaveSession(req, rec, session))
+	require.Empty(t, rec.Result().Cookies(), "encoding failure must not emit a signed-only fallback")
+	_, err = store.Codecs[1].Encode(session.Name(), session.Values)
+	require.ErrorIs(t, err, errLegacyCodecDecodeOnly)
+
+	rec = httptest.NewRecorder()
+	session.Values[IDTokenClaimsSessionKey] = strings.Repeat("x", low-1)
+	require.NoError(t, ValidateEncryptedCookieSessionEncoding(store, session))
+	require.NoError(t, SaveSession(req, rec, session))
+	cookies := rec.Result().Cookies()
+	require.Len(t, cookies, 1)
+	require.LessOrEqual(t, len(cookies[0].Value), 4096)
+	var decoded map[interface{}]interface{}
+	require.NoError(t, store.Codecs[0].Decode(session.Name(), cookies[0].Value, &decoded))
+	require.Error(t, legacyCodec.Decode(session.Name(), cookies[0].Value, &decoded))
 }

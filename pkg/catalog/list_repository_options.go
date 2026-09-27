@@ -9,8 +9,8 @@ import (
 // ListRepositoriesOptions controls list repositories request options
 type ListRepositoriesOptions struct {
 	// FilterFunc is an optional predicate that filters repositories.
-	// Returns true if the repository should be included in the results.
-	FilterFunc func(repoID string) bool
+	// Returns true if the repository should be included, or an error that stops listing.
+	FilterFunc func(repoID string) (bool, error)
 }
 
 // ListRepositoriesOptionsFunc is a function that modifies ListRepositoriesOptions
@@ -25,19 +25,16 @@ func NewListRepositoriesOptions(opts []ListRepositoriesOptionsFunc) *ListReposit
 	return options
 }
 
-// WithListReposPermissionFilter creates a filter predicate based on user policies.
+// WithListReposPermissionFilter snapshots policies and attributes when the option is created.
 // It filters repositories where the user has fs:ListRepositories permission.
-func WithListReposPermissionFilter(username string, policies []*model.Policy) ListRepositoriesOptionsFunc {
+func WithListReposPermissionFilter(username string, policies []*model.Policy, conditionCtx *auth.ConditionContext) ListRepositoriesOptionsFunc {
+	checker, err := auth.PreparePermissionChecker(username, policies, conditionCtx)
 	return func(opts *ListRepositoriesOptions) {
-		if len(policies) == 0 {
-			// No policies means no access to any specific repository
-			opts.FilterFunc = func(repoID string) bool {
-				return false
+		opts.FilterFunc = func(repoID string) (bool, error) {
+			if err != nil {
+				return false, err
 			}
-			return
-		}
-		opts.FilterFunc = func(repoID string) bool {
-			return auth.CheckPermission(permissions.RepoArn(repoID), username, policies, permissions.ListRepositoriesAction, nil)
+			return checker.Check(permissions.RepoArn(repoID), permissions.ListRepositoriesAction)
 		}
 	}
 }

@@ -79,7 +79,7 @@ func TestCheckSecurityRequirementsContinuesPastCorruptCookieSessions(t *testing.
 			user, err := checkSecurityRequirements(rec, req, tt.requirements, logging.Dummy(), nil, authService, newMiddlewareProvisioner(t, authService), store, tt.oidcConfig, tt.cookieAuthConfig)
 
 			require.NoError(t, err)
-			require.Equal(t, tt.expectedUser, user.Username)
+			require.Equal(t, tt.expectedUser, user.User.Username)
 			requireSessionExpired(t, rec.Result().Cookies(), tt.expiredSession)
 		})
 	}
