@@ -3,6 +3,7 @@ package authentication
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"time"
 
@@ -126,14 +127,43 @@ func (s *oidcSession) SaveClaims(claims encoding.Claims, expiresAt time.Time) er
 	return s.SaveClaimsJSON(string(data), expiresAt)
 }
 
-func (s *oidcSession) SaveClaimsJSON(claimsJSON string, expiresAt time.Time) error {
-	if len(claimsJSON) > oidcClaimsMaxJSONSize {
-		return fmt.Errorf("%w: normalized OIDC claims exceed %d bytes", ErrInvalidRequest, oidcClaimsMaxJSONSize)
+func (s *oidcSession) PreflightClaimsJSON(claimsJSON string, expiresAt time.Time) error {
+	candidate, err := s.prepareClaimsSession(claimsJSON, expiresAt)
+	if err != nil {
+		return err
 	}
-	s.session.Values[auth.IDTokenClaimsSessionKey] = claimsJSON
-	auth.MarkOIDCSessionClaimsCurrent(s.session, expiresAt)
-	clearOIDCTransactionValue(s.session)
-	return s.Save()
+	store, ok := candidate.Store().(*sessions.CookieStore)
+	if !ok {
+		return fmt.Errorf("%w: OIDC session requires an encrypted cookie store", auth.ErrInternalServerError)
+	}
+	return auth.ValidateEncryptedCookieSessionEncoding(store, candidate)
+}
+
+func (s *oidcSession) SaveClaimsJSON(claimsJSON string, expiresAt time.Time) error {
+	candidate, err := s.prepareClaimsSession(claimsJSON, expiresAt)
+	if err != nil {
+		return err
+	}
+	if err := auth.SaveSession(s.request, s.writer, candidate); err != nil {
+		return err
+	}
+	s.session.Values = candidate.Values
+	return nil
+}
+
+func (s *oidcSession) prepareClaimsSession(claimsJSON string, expiresAt time.Time) (*sessions.Session, error) {
+	if len(claimsJSON) > oidcClaimsMaxJSONSize {
+		return nil, fmt.Errorf("%w: normalized OIDC claims exceed %d bytes", ErrInvalidRequest, oidcClaimsMaxJSONSize)
+	}
+	candidate := sessions.NewSession(s.session.Store(), s.session.Name())
+	options := *s.session.Options
+	candidate.Options = &options
+	candidate.Values = maps.Clone(s.session.Values)
+	auth.PrepareSessionForSave(candidate)
+	candidate.Values[auth.IDTokenClaimsSessionKey] = claimsJSON
+	auth.MarkOIDCSessionClaimsCurrent(candidate, expiresAt)
+	clearOIDCTransactionValue(candidate)
+	return candidate, nil
 }
 
 func clearOIDCTransactionValue(session *sessions.Session) {

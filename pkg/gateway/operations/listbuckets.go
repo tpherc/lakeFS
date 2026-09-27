@@ -9,6 +9,7 @@ import (
 	"github.com/treeverse/lakefs/pkg/catalog"
 	gwerrors "github.com/treeverse/lakefs/pkg/gateway/errors"
 	"github.com/treeverse/lakefs/pkg/gateway/serde"
+	"github.com/treeverse/lakefs/pkg/httputil"
 	"github.com/treeverse/lakefs/pkg/permissions"
 )
 
@@ -59,7 +60,8 @@ func (controller *ListBuckets) Handle(w http.ResponseWriter, req *http.Request, 
 			_ = o.EncodeError(w, req, nil, gwerrors.Codes.ToAPIErr(gwerrors.ErrAccessDenied))
 			return
 		}
-		opts = append(opts, catalog.WithListReposPermissionFilter(user.Username, policies))
+		opts = append(opts, catalog.WithListReposPermissionFilter(user.Username, policies,
+			auth.NewRequestConditionContext(ctx, httputil.ExtractClientIP(req.Header, req.RemoteAddr))))
 	}
 
 	buckets := make([]serde.Bucket, 0)

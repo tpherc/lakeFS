@@ -29,7 +29,7 @@ func AuthenticationHandler(authService auth.GatewayService, next http.Handler) h
 		user, err := auth.GetUser(ctx)
 		if err == nil {
 			ctx = logging.AddFields(ctx, logging.Fields{logging.UserFieldKey: user.Username})
-			req = req.WithContext(auth.WithUser(ctx, user))
+			req = req.WithContext(ctx)
 			next.ServeHTTP(w, req)
 			return
 		}

@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/treeverse/lakefs/pkg/auth"
 	"github.com/treeverse/lakefs/pkg/auth/oidc/encoding"
+	"github.com/treeverse/lakefs/pkg/auth/oidc/principaltags"
 	"github.com/treeverse/lakefs/pkg/authentication/apiclient"
 	"github.com/treeverse/lakefs/pkg/config"
 	"github.com/treeverse/lakefs/pkg/httputil"
@@ -153,12 +154,17 @@ func (s *OIDCService) OauthCallback(w http.ResponseWriter, r *http.Request, sess
 		redirectToLogin(w, r)
 		return
 	}
+	expiresAt := time.Now().Add(s.sessionDuration)
+	if err := oidcSession.PreflightClaimsJSON(claimsJSON, expiresAt); err != nil {
+		s.logger.WithError(err).Error("failed to encode OIDC session")
+		redirectToLogin(w, r)
+		return
+	}
 	if _, err := auth.ResolveOrProvisionOIDCUserFromClaims(r.Context(), s.logger, s.provisioner, claims, &authOIDCConfig); err != nil {
 		s.logger.WithError(err).Error("failed to resolve or provision OIDC user")
 		redirectToLogin(w, r)
 		return
 	}
-	expiresAt := time.Now().Add(s.sessionDuration)
 	if err := oidcSession.SaveClaimsJSON(claimsJSON, expiresAt); err != nil {
 		s.logger.WithError(err).Error("failed to save OIDC session")
 		redirectToLogin(w, r)
@@ -245,6 +251,10 @@ func normalizeOIDCClaims(claims encoding.Claims, cfg config.OIDC) (encoding.Clai
 	if !ok || issuer == "" {
 		return nil, fmt.Errorf("%w: OIDC claims missing issuer", ErrInvalidRequest)
 	}
+	tags, err := principaltags.Extract(claims)
+	if err != nil {
+		return nil, err
+	}
 	normalized := encoding.Claims{
 		"iss": issuer,
 		"sub": sub,
@@ -252,6 +262,12 @@ func normalizeOIDCClaims(claims encoding.Claims, cfg config.OIDC) (encoding.Clai
 	copyConfiguredClaim(normalized, claims, cfg.FriendlyNameClaimName)
 	for claimName := range cfg.ValidateIDTokenClaims {
 		copyConfiguredClaim(normalized, claims, claimName)
+	}
+	// The canonical namespace is authoritative, even when configured claims
+	// include the namespace or a flattened PrincipalTag claim.
+	delete(normalized, principaltags.NamespaceClaim)
+	if len(tags) != 0 {
+		normalized[principaltags.NamespaceClaim] = principaltags.ToNestedClaim(tags)
 	}
 	return normalized, nil
 }
