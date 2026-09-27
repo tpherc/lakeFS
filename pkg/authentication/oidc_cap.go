@@ -217,7 +217,9 @@ func (t *boundedRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 		next = http.DefaultTransport
 	}
 	ctx := req.Context()
-	cancel := func() {}
+	cancel := func() {
+		// Requests without an added deadline or startup context need no cancellation.
+	}
 	if t.startupCtx != nil && t.usedStartupContext.CompareAndSwap(false, true) {
 		var parentCancel context.CancelFunc
 		ctx, parentCancel = cancelWithParent(ctx, t.startupCtx)

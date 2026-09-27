@@ -22,7 +22,7 @@ interface Action {
 }
 
 const initialLocalSettings: AppContext = {
-    darkMode: document.documentElement.getAttribute('data-bs-theme') === 'dark',
+    darkMode: document.documentElement.dataset.bsTheme === 'dark',
 };
 
 const initialAppContext: AppContextType = {
@@ -53,7 +53,7 @@ const WithAppContext: React.FC = ({ children }) => {
     const [state, dispatch] = useReducer(appContextReducer, initialAppContext);
 
     useLayoutEffect(() => {
-        document.documentElement.setAttribute('data-bs-theme', state.settings.darkMode ? 'dark' : 'light');
+        document.documentElement.dataset.bsTheme = state.settings.darkMode ? 'dark' : 'light';
         try {
             window.localStorage.setItem(localStorageKeys.darkMode, String(state.settings.darkMode));
         } catch {

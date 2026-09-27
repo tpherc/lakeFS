@@ -187,11 +187,7 @@ func validateComparedValues(diff *graveler.Diff) error {
 		if diff.Value != nil && diff.LeftValue == nil {
 			return nil
 		}
-	case graveler.DiffTypeRemoved:
-		if diff.LeftValue != nil && diff.Value != nil {
-			return nil
-		}
-	case graveler.DiffTypeChanged:
+	case graveler.DiffTypeRemoved, graveler.DiffTypeChanged:
 		if diff.LeftValue != nil && diff.Value != nil {
 			return nil
 		}

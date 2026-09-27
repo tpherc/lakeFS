@@ -134,29 +134,7 @@ func TestControllerNativeS3GCSReferences(t *testing.T) {
 	s3Server, _ := newBindingS3Endpoint(t, "s3-access-key", "SSSS", "STANDARD")
 	var gcsPropertyCalls atomic.Int64
 	gcsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/storage/v1/b/raw/o/object" && r.URL.Query().Get("alt") != "media" {
-			gcsPropertyCalls.Add(1)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"bucket":"raw","name":"object","size":"4","generation":"1","etag":"same-etag","storageClass":"STANDARD","updated":"2026-09-26T00:00:00Z"}`)
-			return
-		}
-		if r.URL.Path != "/raw/object" && r.URL.Path != "/download/storage/v1/b/raw/o/object" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("ETag", `"same-etag"`)
-		w.Header().Set("Last-Modified", "Sat, 26 Sep 2026 00:00:00 GMT")
-		w.Header().Set("X-Goog-Generation", "1")
-		if r.Header.Get("Range") == "bytes=1-2" {
-			w.Header().Set("Content-Length", "2")
-			w.Header().Set("Content-Range", "bytes 1-2/4")
-			w.WriteHeader(http.StatusPartialContent)
-			_, _ = io.WriteString(w, "GG")
-			return
-		}
-		w.Header().Set("Content-Length", "4")
-		_, _ = io.WriteString(w, "GGGG")
+		serveBindingGCSObject(w, r, &gcsPropertyCalls)
 	}))
 	t.Cleanup(gcsServer.Close)
 	t.Setenv("STORAGE_EMULATOR_HOST", gcsServer.URL)
@@ -277,4 +255,30 @@ func TestControllerNativeAzureReference(t *testing.T) {
 	require.True(t, strings.HasPrefix(signedURL.String(), azureServer.URL+"/container/object?"))
 	require.NotEmpty(t, signedURL.Query().Get("sig"))
 	require.Equal(t, "r", signedURL.Query().Get("sp"))
+}
+
+func serveBindingGCSObject(w http.ResponseWriter, r *http.Request, gcsPropertyCalls *atomic.Int64) {
+	if r.URL.Path == "/storage/v1/b/raw/o/object" && r.URL.Query().Get("alt") != "media" {
+		gcsPropertyCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"bucket":"raw","name":"object","size":"4","generation":"1","etag":"same-etag","storageClass":"STANDARD","updated":"2026-09-26T00:00:00Z"}`)
+		return
+	}
+	if r.URL.Path != "/raw/object" && r.URL.Path != "/download/storage/v1/b/raw/o/object" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("ETag", `"same-etag"`)
+	w.Header().Set("Last-Modified", "Sat, 26 Sep 2026 00:00:00 GMT")
+	w.Header().Set("X-Goog-Generation", "1")
+	if r.Header.Get("Range") == "bytes=1-2" {
+		w.Header().Set("Content-Length", "2")
+		w.Header().Set("Content-Range", "bytes 1-2/4")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = io.WriteString(w, "GG")
+		return
+	}
+	w.Header().Set("Content-Length", "4")
+	_, _ = io.WriteString(w, "GGGG")
 }

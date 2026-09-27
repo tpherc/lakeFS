@@ -10,6 +10,8 @@ import (
 	"github.com/spf13/viper"
 )
 
+const blockstoresStoresKey = "blockstores.stores"
+
 var storageIDRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
 type storageConfigSource struct {
@@ -59,10 +61,10 @@ func envTreeExists(key string) bool {
 }
 
 func explicitBlockstoresValue() bool {
-	if configKeyInFileOrEnv("blockstores.stores") || configKeyInFileOrEnv("blockstores.signing.secret_key") {
+	if configKeyInFileOrEnv(blockstoresStoresKey) || configKeyInFileOrEnv("blockstores.signing.secret_key") {
 		return true
 	}
-	if viper.Get("blockstores.stores") != nil {
+	if viper.Get(blockstoresStoresKey) != nil {
 		return true
 	}
 	return viper.GetString("blockstores.signing.secret_key") != ""
@@ -164,7 +166,7 @@ func resolveCanonicalBlockstores(canonical *Blockstores) (*Blockstore, error) {
 }
 
 func canonicalStoreRawEntries() []map[string]any {
-	raw := viper.Get("blockstores.stores")
+	raw := viper.Get(blockstoresStoresKey)
 	switch stores := raw.(type) {
 	case []map[string]any:
 		out := make([]map[string]any, len(stores))
@@ -233,62 +235,78 @@ func rawConfigPathExists(values map[string]any, path ...string) bool {
 func applyCanonicalStoreDefaults(cfg BlockstoreConfig, raw map[string]any) BlockstoreConfig {
 	switch strings.ToLower(cfg.Type) {
 	case "local":
-		if cfg.Local == nil {
-			cfg.Local = &BlockstoreLocal{}
-		}
-		if !rawConfigPathExists(raw, "local", "path") {
-			cfg.Local.Path = DefaultBlockstoreLocalPath
-		}
+		applyCanonicalLocalDefaults(&cfg, raw)
 	case "s3":
-		if cfg.S3 == nil {
-			cfg.S3 = &BlockstoreS3{}
-		}
-		if !rawConfigPathExists(raw, "s3", "region") {
-			cfg.S3.Region = DefaultBlockstoreS3Region
-		}
-		if !rawConfigPathExists(raw, "s3", "max_retries") {
-			cfg.S3.MaxRetries = DefaultBlockstoreS3MaxRetries
-		}
-		if !rawConfigPathExists(raw, "s3", "discover_bucket_region") {
-			cfg.S3.DiscoverBucketRegion = DefaultBlockstoreS3DiscoverBucketRegion
-		}
-		if !rawConfigPathExists(raw, "s3", "pre_signed_expiry") {
-			cfg.S3.PreSignedExpiry = DefaultBlockstoreS3PreSignedExpiry
-		}
-		if !rawConfigPathExists(raw, "s3", "disable_pre_signed_ui") {
-			cfg.S3.DisablePreSignedUI = DefaultBlockstoreS3DisablePreSignedUI
-		}
-		if cfg.S3.WebIdentity != nil && !rawConfigPathExists(raw, "s3", "web_identity", "session_expiry_window") {
-			cfg.S3.WebIdentity.SessionExpiryWindow = DefaultBlockstoreS3WebIdentitySessionExpiryWindow
-		}
+		applyCanonicalS3Defaults(&cfg, raw)
 	case "gs":
-		if cfg.GS == nil {
-			cfg.GS = &BlockstoreGS{}
-		}
-		if !rawConfigPathExists(raw, "gs", "s3_endpoint") {
-			cfg.GS.S3Endpoint = DefaultBlockstoreGSS3Endpoint
-		}
-		if !rawConfigPathExists(raw, "gs", "pre_signed_expiry") {
-			cfg.GS.PreSignedExpiry = DefaultBlockstoreGSPreSignedExpiry
-		}
-		if !rawConfigPathExists(raw, "gs", "disable_pre_signed_ui") {
-			cfg.GS.DisablePreSignedUI = DefaultBlockstoreGSDisablePreSignedUI
-		}
+		applyCanonicalGSDefaults(&cfg, raw)
 	case "azure":
-		if cfg.Azure == nil {
-			cfg.Azure = &BlockstoreAzure{}
-		}
-		if !rawConfigPathExists(raw, "azure", "try_timeout") {
-			cfg.Azure.TryTimeout = DefaultBlockstoreAzureTryTimeout
-		}
-		if !rawConfigPathExists(raw, "azure", "pre_signed_expiry") {
-			cfg.Azure.PreSignedExpiry = DefaultBlockstoreAzurePreSignedExpiry
-		}
-		if !rawConfigPathExists(raw, "azure", "disable_pre_signed_ui") {
-			cfg.Azure.DisablePreSignedUI = DefaultBlockstoreAzureDisablePreSignedUI
-		}
+		applyCanonicalAzureDefaults(&cfg, raw)
 	}
 	return cfg
+}
+
+func applyCanonicalLocalDefaults(cfg *BlockstoreConfig, raw map[string]any) {
+	if cfg.Local == nil {
+		cfg.Local = &BlockstoreLocal{}
+	}
+	if !rawConfigPathExists(raw, "local", "path") {
+		cfg.Local.Path = DefaultBlockstoreLocalPath
+	}
+}
+
+func applyCanonicalS3Defaults(cfg *BlockstoreConfig, raw map[string]any) {
+	if cfg.S3 == nil {
+		cfg.S3 = &BlockstoreS3{}
+	}
+	if !rawConfigPathExists(raw, "s3", "region") {
+		cfg.S3.Region = DefaultBlockstoreS3Region
+	}
+	if !rawConfigPathExists(raw, "s3", "max_retries") {
+		cfg.S3.MaxRetries = DefaultBlockstoreS3MaxRetries
+	}
+	if !rawConfigPathExists(raw, "s3", "discover_bucket_region") {
+		cfg.S3.DiscoverBucketRegion = DefaultBlockstoreS3DiscoverBucketRegion
+	}
+	if !rawConfigPathExists(raw, "s3", "pre_signed_expiry") {
+		cfg.S3.PreSignedExpiry = DefaultBlockstoreS3PreSignedExpiry
+	}
+	if !rawConfigPathExists(raw, "s3", "disable_pre_signed_ui") {
+		cfg.S3.DisablePreSignedUI = DefaultBlockstoreS3DisablePreSignedUI
+	}
+	if cfg.S3.WebIdentity != nil && !rawConfigPathExists(raw, "s3", "web_identity", "session_expiry_window") {
+		cfg.S3.WebIdentity.SessionExpiryWindow = DefaultBlockstoreS3WebIdentitySessionExpiryWindow
+	}
+}
+
+func applyCanonicalGSDefaults(cfg *BlockstoreConfig, raw map[string]any) {
+	if cfg.GS == nil {
+		cfg.GS = &BlockstoreGS{}
+	}
+	if !rawConfigPathExists(raw, "gs", "s3_endpoint") {
+		cfg.GS.S3Endpoint = DefaultBlockstoreGSS3Endpoint
+	}
+	if !rawConfigPathExists(raw, "gs", "pre_signed_expiry") {
+		cfg.GS.PreSignedExpiry = DefaultBlockstoreGSPreSignedExpiry
+	}
+	if !rawConfigPathExists(raw, "gs", "disable_pre_signed_ui") {
+		cfg.GS.DisablePreSignedUI = DefaultBlockstoreGSDisablePreSignedUI
+	}
+}
+
+func applyCanonicalAzureDefaults(cfg *BlockstoreConfig, raw map[string]any) {
+	if cfg.Azure == nil {
+		cfg.Azure = &BlockstoreAzure{}
+	}
+	if !rawConfigPathExists(raw, "azure", "try_timeout") {
+		cfg.Azure.TryTimeout = DefaultBlockstoreAzureTryTimeout
+	}
+	if !rawConfigPathExists(raw, "azure", "pre_signed_expiry") {
+		cfg.Azure.PreSignedExpiry = DefaultBlockstoreAzurePreSignedExpiry
+	}
+	if !rawConfigPathExists(raw, "azure", "disable_pre_signed_ui") {
+		cfg.Azure.DisablePreSignedUI = DefaultBlockstoreAzureDisablePreSignedUI
+	}
 }
 
 func (b *Blockstore) IsMultiStorage() bool {

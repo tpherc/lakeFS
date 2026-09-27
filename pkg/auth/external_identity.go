@@ -159,70 +159,82 @@ func (p *ExternalIdentityProvisioner) ResolveOrProvisionExternalUser(ctx context
 	}
 
 	for range externalIdentityProvisioningMaxLoops {
-		user, found, err := p.lookupExternalUser(ctx, identity)
-		if err != nil {
-			return nil, err
-		}
-
-		record, predicate, recordFound, err := p.loadProvisioningRecord(ctx, identity)
-		if err != nil {
-			return nil, err
-		}
-		if !recordFound {
-			if found {
-				return enhanceExternalUserFriendlyName(ctx, user, identity.FriendlyName, options.PersistFriendlyName, p.authService, p.logger), nil
-			}
-			groups, err := loadInitialGroups(initialGroups)
-			if err != nil {
-				return nil, err
-			}
-			lease, acquired, err := p.createPending(ctx, identity, groups)
-			if err != nil {
-				return nil, err
-			}
-			if !acquired {
-				continue
-			}
-			return p.completeProvisioning(ctx, identity, lease, options)
-		}
-
-		switch record.State {
-		case externalIdentityProvisioningPending:
-			lease, acquired, err := p.claimPending(ctx, identity, record, predicate)
-			if err != nil {
-				return nil, err
-			}
-			if !acquired {
-				continue
-			}
-			return p.completeProvisioning(ctx, identity, lease, options)
-		case externalIdentityProvisioningComplete:
-			if !found {
-				user, found, err = p.lookupExternalUser(ctx, identity)
-				if err != nil {
-					return nil, err
-				}
-			}
-			if found {
-				return enhanceExternalUserFriendlyName(ctx, user, identity.FriendlyName, options.PersistFriendlyName, p.authService, p.logger), nil
-			}
-			groups, err := loadInitialGroups(initialGroups)
-			if err != nil {
-				return nil, err
-			}
-			lease, acquired, err := p.reopenCompletedProvisioning(ctx, identity, record, predicate, groups)
-			if err != nil {
-				return nil, err
-			}
-			if !acquired {
-				continue
-			}
-			return p.completeProvisioning(ctx, identity, lease, options)
-		default:
-			return nil, invalidProvisioningStateError(record)
+		user, retry, err := p.resolveOrProvisionExternalUserAttempt(ctx, identity, initialGroups, options)
+		if err != nil || !retry {
+			return user, err
 		}
 	}
 	return nil, externalIdentityInternalError("external user provisioning state did not converge", nil)
+}
+
+// resolveOrProvisionExternalUserAttempt requests a retry only when another worker
+// wins a conditional provisioning-state update. Each retry reloads both user and state.
+func (p *ExternalIdentityProvisioner) resolveOrProvisionExternalUserAttempt(ctx context.Context, identity ExternalIdentity, initialGroups func() ([]string, error), options ExternalIdentityProvisioningOptions) (*model.User, bool, error) {
+	user, found, err := p.lookupExternalUser(ctx, identity)
+	if err != nil {
+		return nil, false, err
+	}
+
+	record, predicate, recordFound, err := p.loadProvisioningRecord(ctx, identity)
+	if err != nil {
+		return nil, false, err
+	}
+	if !recordFound {
+		if found {
+			return enhanceExternalUserFriendlyName(ctx, user, identity.FriendlyName, options.PersistFriendlyName, p.authService, p.logger), false, nil
+		}
+		groups, err := loadInitialGroups(initialGroups)
+		if err != nil {
+			return nil, false, err
+		}
+		lease, acquired, err := p.createPending(ctx, identity, groups)
+		if err != nil {
+			return nil, false, err
+		}
+		if !acquired {
+			return nil, true, nil
+		}
+		user, err := p.completeProvisioning(ctx, identity, lease, options)
+		return user, false, err
+	}
+
+	switch record.State {
+	case externalIdentityProvisioningPending:
+		lease, acquired, err := p.claimPending(ctx, identity, record, predicate)
+		if err != nil {
+			return nil, false, err
+		}
+		if !acquired {
+			return nil, true, nil
+		}
+		user, err := p.completeProvisioning(ctx, identity, lease, options)
+		return user, false, err
+	case externalIdentityProvisioningComplete:
+		if !found {
+			user, found, err = p.lookupExternalUser(ctx, identity)
+			if err != nil {
+				return nil, false, err
+			}
+		}
+		if found {
+			return enhanceExternalUserFriendlyName(ctx, user, identity.FriendlyName, options.PersistFriendlyName, p.authService, p.logger), false, nil
+		}
+		groups, err := loadInitialGroups(initialGroups)
+		if err != nil {
+			return nil, false, err
+		}
+		lease, acquired, err := p.reopenCompletedProvisioning(ctx, identity, record, predicate, groups)
+		if err != nil {
+			return nil, false, err
+		}
+		if !acquired {
+			return nil, true, nil
+		}
+		user, err := p.completeProvisioning(ctx, identity, lease, options)
+		return user, false, err
+	default:
+		return nil, false, invalidProvisioningStateError(record)
+	}
 }
 
 func (p *ExternalIdentityProvisioner) validateReady() error {

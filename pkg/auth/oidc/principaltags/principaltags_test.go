@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"github.com/treeverse/lakefs/pkg/auth/oidc/encoding"
 	"github.com/treeverse/lakefs/pkg/auth/oidc/principaltags"
 )
@@ -29,24 +30,15 @@ func TestExtractAWSForms(t *testing.T) {
 		t.Run(fmt.Sprintf("form_%d", i), func(t *testing.T) {
 			claims := decodeClaims(t, fixture)
 			tags, err := principaltags.Extract(claims)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(tags, want) {
-				t.Fatalf("tags = %#v, want %#v", tags, want)
-			}
+			require.NoError(t, err)
+			require.Equal(t, want, tags)
 			canonical := principaltags.ToNestedClaim(tags)
-			if _, found := canonical["transitive_tag_keys"]; found {
-				t.Fatal("canonical claim retained transitive tag keys")
-			}
+			require.NotContains(t, canonical, "transitive_tag_keys")
 			canonicalJSON, err := json.Marshal(encoding.Claims{principaltags.NamespaceClaim: canonical})
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			roundTrip, err := principaltags.FromNormalizedClaims(decodeClaims(t, string(canonicalJSON)))
-			if err != nil || !reflect.DeepEqual(roundTrip, want) {
-				t.Fatalf("canonical round-trip = %#v, %v", roundTrip, err)
-			}
+			require.NoError(t, err)
+			require.Equal(t, want, roundTrip)
 		})
 	}
 }
@@ -173,11 +165,11 @@ func TestExtractTagValidation(t *testing.T) {
 			for _, claims := range forms {
 				tags, err := principaltags.Extract(claims)
 				if tt.valid {
-					if err != nil || !reflect.DeepEqual(tags, principaltags.Tags{tt.key: tt.value}) {
-						t.Fatalf("Extract = %#v, %v", tags, err)
-					}
-				} else if !errors.Is(err, principaltags.ErrInvalidTags) || tags != nil {
-					t.Fatalf("Extract = %#v, %v; want no partial tags and ErrInvalidTags", tags, err)
+					require.NoError(t, err)
+					require.Equal(t, principaltags.Tags{tt.key: tt.value}, tags)
+				} else {
+					require.ErrorIs(t, err, principaltags.ErrInvalidTags)
+					require.Nil(t, tags, "invalid input must not return partial tags")
 				}
 			}
 		})

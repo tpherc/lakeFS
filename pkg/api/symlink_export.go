@@ -46,7 +46,7 @@ func (c *Controller) captureSymlinkRecords(ctx context.Context, repo *catalog.Re
 	encoder := json.NewEncoder(output)
 	var after string
 	for {
-		entries, hasMore, err := c.Catalog.ListEntries(ctx, repo.Name, branch, prefix, after, "", DefaultMaxPerPage)
+		entries, hasMore, err := c.Catalog.ListEntries(ctx, repo.Name, branch, catalog.ListEntriesParams{Prefix: prefix, After: after, Limit: DefaultMaxPerPage})
 		if err != nil {
 			return err
 		}
@@ -54,18 +54,11 @@ func (c *Controller) captureSymlinkRecords(ctx context.Context, repo *catalog.Re
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			pointer, err := entryObjectPointer(repo, entry)
+			record, err := c.symlinkRecord(repo, entry)
 			if err != nil {
 				return err
 			}
-			if pointer.StorageID != repo.StorageID {
-				return fmt.Errorf("URI-only symlink export cannot represent storage id %q at %q: %w", pointer.StorageID, entry.Path, block.ErrOperationNotSupported)
-			}
-			address, err := c.objectPhysicalAddress(pointer)
-			if err != nil {
-				return err
-			}
-			if err := encoder.Encode(symlinkRecord{Path: entry.Path, Address: address}); err != nil {
+			if err := encoder.Encode(record); err != nil {
 				return fmt.Errorf("capture export entry: %w", err)
 			}
 		}
@@ -77,6 +70,21 @@ func (c *Controller) captureSymlinkRecords(ctx context.Context, repo *catalog.Re
 		}
 		after = entries[len(entries)-1].Path
 	}
+}
+
+func (c *Controller) symlinkRecord(repo *catalog.Repository, entry *catalog.DBEntry) (symlinkRecord, error) {
+	pointer, err := entryObjectPointer(repo, entry)
+	if err != nil {
+		return symlinkRecord{}, err
+	}
+	if pointer.StorageID != repo.StorageID {
+		return symlinkRecord{}, fmt.Errorf("URI-only symlink export cannot represent storage id %q at %q: %w", pointer.StorageID, entry.Path, block.ErrOperationNotSupported)
+	}
+	address, err := c.objectPhysicalAddress(pointer)
+	if err != nil {
+		return symlinkRecord{}, err
+	}
+	return symlinkRecord{Path: entry.Path, Address: address}, nil
 }
 
 type symlinkManifest struct {

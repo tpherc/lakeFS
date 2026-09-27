@@ -142,7 +142,13 @@ func copyAuthorizedEntry(ctx context.Context, o *PathOperation, replaceMetadata 
 		return nil, err
 	}
 	source := o.ObjectRead.Path
-	return o.Catalog.CopyEntryFromSnapshot(ctx, source.Repo, source.Reference, entry, o.Repository.Name, o.Reference, o.Path, replaceMetadata, metadata)
+	return o.Catalog.CopyEntryFromSnapshot(ctx, source.Repo, source.Reference, entry, catalog.CopyEntryParams{
+		DestinationRepository: o.Repository.Name,
+		DestinationBranch:     o.Reference,
+		DestinationPath:       o.Path,
+		ReplaceMetadata:       replaceMetadata,
+		Metadata:              metadata,
+	})
 }
 
 func handleUploadPart(w http.ResponseWriter, req *http.Request, o *PathOperation) {

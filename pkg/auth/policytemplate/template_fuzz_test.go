@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"github.com/treeverse/lakefs/pkg/auth/policytemplate"
 	"github.com/treeverse/lakefs/pkg/auth/wildcard"
 )
@@ -23,26 +24,23 @@ func FuzzCompileResolve(f *testing.F) {
 		}
 		template, err := policytemplate.Compile(source)
 		if err != nil {
-			if template != nil || (!errors.Is(err, policytemplate.ErrInvalidTemplate) && !errors.Is(err, policytemplate.ErrLimitExceeded)) {
-				t.Fatalf("Compile() = %v, %v", template, err)
-			}
+			require.Nil(t, template)
+			require.True(t, errors.Is(err, policytemplate.ErrInvalidTemplate) || errors.Is(err, policytemplate.ErrLimitExceeded), "unexpected compile error: %v", err)
 			return
 		}
 		lookup := func(string) (string, bool) { return "value", true }
 		got, resolved, err := template.Resolve(lookup)
-		if err != nil || !resolved {
-			t.Fatalf("accepted template failed resolution: %v, %v", resolved, err)
-		}
-		if !strings.Contains(source, "${") && got != source {
-			t.Fatal("static source changed")
-		}
-		if strings.Contains(source, "${") && len(got) > policytemplate.MaxResolvedBytes {
-			t.Fatal("dynamic result exceeds its size limit")
+		require.NoError(t, err)
+		require.True(t, resolved, "accepted template must resolve")
+		if strings.Contains(source, "${") {
+			require.LessOrEqual(t, len(got), policytemplate.MaxResolvedBytes)
+		} else {
+			require.Equal(t, source, got, "static source changed")
 		}
 		other, resolved, err := template.Resolve(lookup)
-		if err != nil || !resolved || other != got {
-			t.Fatal("template resolution changed across identical requests")
-		}
+		require.NoError(t, err)
+		require.True(t, resolved)
+		require.Equal(t, got, other, "template resolution changed across identical requests")
 	})
 }
 
@@ -58,17 +56,17 @@ func FuzzResolvePreservesReplacement(f *testing.F) {
 		got, resolved, err := template.Resolve(func(string) (string, bool) { return value, true })
 		switch {
 		case strings.ContainsAny(value, "*?"):
-			if !errors.Is(err, policytemplate.ErrWildcardValue) || resolved || got != "" {
-				t.Fatalf("wildcard value accepted: %v, %v", resolved, err)
-			}
+			require.ErrorIs(t, err, policytemplate.ErrWildcardValue)
+			require.False(t, resolved)
+			require.Empty(t, got)
 		case len("before//after")+len(value) > policytemplate.MaxResolvedBytes:
-			if !errors.Is(err, policytemplate.ErrLimitExceeded) || resolved || got != "" {
-				t.Fatalf("oversized value accepted: %v, %v", resolved, err)
-			}
+			require.ErrorIs(t, err, policytemplate.ErrLimitExceeded)
+			require.False(t, resolved)
+			require.Empty(t, got)
 		default:
-			if err != nil || !resolved || got != "before/"+value+"/after" {
-				t.Fatalf("replacement was interpreted: %v, %v", resolved, err)
-			}
+			require.NoError(t, err)
+			require.True(t, resolved)
+			require.Equal(t, "before/"+value+"/after", got, "replacement was interpreted")
 		}
 	})
 }

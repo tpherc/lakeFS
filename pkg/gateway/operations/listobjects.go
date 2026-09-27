@@ -251,10 +251,7 @@ func (controller *ListObjects) ListV2(w http.ResponseWriter, req *http.Request, 
 			req.Context(),
 			o.Repository.Name,
 			prefix.Ref,
-			prefix.Path,
-			from.Path,
-			delimiter,
-			maxKeys,
+			catalog.ListEntriesParams{Prefix: prefix.Path, After: from.Path, Delimiter: delimiter, Limit: maxKeys},
 			listEntriesPermissionFilter(req, o),
 		)
 		log := o.Log(req).WithError(err).WithFields(logging.Fields{
@@ -361,10 +358,7 @@ func (controller *ListObjects) ListV1(w http.ResponseWriter, req *http.Request, 
 			req.Context(),
 			o.Repository.Name,
 			prefix.Ref,
-			prefix.Path,
-			marker.Path,
-			delimiter,
-			maxKeys,
+			catalog.ListEntriesParams{Prefix: prefix.Path, After: marker.Path, Delimiter: delimiter, Limit: maxKeys},
 			listEntriesPermissionFilter(req, o),
 		)
 		if errors.Is(err, graveler.ErrNotFound) {

@@ -378,44 +378,49 @@ func TestGCReferencesStagingCommittedBeforeRootCapture(t *testing.T) {
 	t.Parallel()
 	for _, failCommitRead := range []bool{false, true} {
 		t.Run(fmt.Sprint(failCommitRead), func(t *testing.T) {
-			c, owner, state, store, adapter := newGCReferencesScanTest(t)
-			moved := bindingTestDiff("moving-key", "alias", "s3://bucket/owner/data/moved", Entry_FULL)
-			store.staging = map[graveler.RepositoryID][]*graveler.Diff{"source": {moved}}
-			store.commits = map[graveler.RepositoryID][]*graveler.CommitRecord{}
-			store.committedByRef = map[graveler.RepositoryID]map[graveler.Ref][]*graveler.ValueRecord{}
-			movedToCommit := false
-			store.afterStaging = func(id graveler.RepositoryID, exhausted bool) {
-				if id != "source" {
-					return
-				}
-				require.True(t, exhausted, "commit must happen after every staged entry was consumed")
-				delete(store.staging, id)
-				store.commits[id] = []*graveler.CommitRecord{{CommitID: "new-commit", Commit: &graveler.Commit{MetaRangeID: "new-meta"}}}
-				store.committedByRef[id] = map[graveler.Ref][]*graveler.ValueRecord{"new-commit": {{Key: moved.Key, Value: moved.Value}}}
-				store.events = append(store.events, "source:commit-staged-entry")
-				movedToCommit = true
-				if failCommitRead {
-					store.failure = "commit iterator"
-				}
-			}
-			result, err := c.prepareGCReferenceArtifacts(t.Context(), owner, &state.Manifest, &gcReferencesProgress{})
-			require.True(t, movedToCommit)
-			require.Empty(t, store.staging["source"])
-			if failCommitRead {
-				require.ErrorIs(t, err, errGCReferencesTest)
-				require.Nil(t, result)
-				for location := range adapter.objects {
-					require.False(t, strings.HasSuffix(location, "manifest.json"))
-				}
-				return
-			}
-			require.NoError(t, err)
-			require.NotNil(t, result)
-			require.EqualValues(t, 1, state.Manifest.CommitCount, "the commit created at the staging boundary must be discovered")
-			require.Equal(t, []string{"data/moved", "data/moved"}, gcReferencesTestAddresses(t, state.Manifest, adapter), "both staged and newly committed protection are observed")
-			require.Contains(t, store.events, "source:commit:new-commit")
+			testGCReferencesStagingCommit(t, failCommitRead)
 		})
 	}
+}
+
+func testGCReferencesStagingCommit(t *testing.T, failCommitRead bool) {
+	t.Helper()
+	c, owner, state, store, adapter := newGCReferencesScanTest(t)
+	moved := bindingTestDiff("moving-key", "alias", "s3://bucket/owner/data/moved", Entry_FULL)
+	store.staging = map[graveler.RepositoryID][]*graveler.Diff{"source": {moved}}
+	store.commits = map[graveler.RepositoryID][]*graveler.CommitRecord{}
+	store.committedByRef = map[graveler.RepositoryID]map[graveler.Ref][]*graveler.ValueRecord{}
+	movedToCommit := false
+	store.afterStaging = func(id graveler.RepositoryID, exhausted bool) {
+		if id != "source" {
+			return
+		}
+		require.True(t, exhausted, "commit must happen after every staged entry was consumed")
+		delete(store.staging, id)
+		store.commits[id] = []*graveler.CommitRecord{{CommitID: "new-commit", Commit: &graveler.Commit{MetaRangeID: "new-meta"}}}
+		store.committedByRef[id] = map[graveler.Ref][]*graveler.ValueRecord{"new-commit": {{Key: moved.Key, Value: moved.Value}}}
+		store.events = append(store.events, "source:commit-staged-entry")
+		movedToCommit = true
+		if failCommitRead {
+			store.failure = "commit iterator"
+		}
+	}
+	result, err := c.prepareGCReferenceArtifacts(t.Context(), owner, &state.Manifest, &gcReferencesProgress{})
+	require.True(t, movedToCommit)
+	require.Empty(t, store.staging["source"])
+	if failCommitRead {
+		require.ErrorIs(t, err, errGCReferencesTest)
+		require.Nil(t, result)
+		for location := range adapter.objects {
+			require.False(t, strings.HasSuffix(location, "manifest.json"))
+		}
+		return
+	}
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.EqualValues(t, 1, state.Manifest.CommitCount, "the commit created at the staging boundary must be discovered")
+	require.Equal(t, []string{"data/moved", "data/moved"}, gcReferencesTestAddresses(t, state.Manifest, adapter), "both staged and newly committed protection are observed")
+	require.Contains(t, store.events, "source:commit:new-commit")
 }
 
 func TestGCReferencesRecentDeletionRetainsOldPredecessor(t *testing.T) {

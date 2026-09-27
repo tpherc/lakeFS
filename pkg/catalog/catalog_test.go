@@ -638,7 +638,7 @@ func TestCatalog_ListEntries(t *testing.T) {
 			}
 			// test method
 			ctx := t.Context()
-			got, hasMore, err := c.ListEntries(ctx, "repo", "ref", tt.args.prefix, tt.args.after, tt.args.delimiter, tt.args.limit)
+			got, hasMore, err := c.ListEntries(ctx, "repo", "ref", catalog.ListEntriesParams{Prefix: tt.args.prefix, After: tt.args.after, Delimiter: tt.args.delimiter, Limit: tt.args.limit})
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ListEntries() error = %v, wantErr %v", err, tt.wantErr)
 			}

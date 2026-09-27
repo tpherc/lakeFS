@@ -92,7 +92,7 @@ func TestCatalog_ListEntriesFilter(t *testing.T) {
 				require.True(t, strings.HasPrefix(entry.Path, tt.prefix), "prefix restriction must precede filtering")
 				return entry.Metadata["dcs:cls"] == "U", nil
 			}
-			entries, more, err := c.ListEntries(t.Context(), "repo", "main", tt.prefix, tt.after, tt.delimiter, tt.limit, catalog.WithEntryFilter(filter))
+			entries, more, err := c.ListEntries(t.Context(), "repo", "main", catalog.ListEntriesParams{Prefix: tt.prefix, After: tt.after, Delimiter: tt.delimiter, Limit: tt.limit}, catalog.WithEntryFilter(filter))
 			require.NoError(t, err)
 			require.Equal(t, tt.paths, listingPaths(entries))
 			require.Equal(t, tt.hasMore, more)
@@ -117,7 +117,7 @@ func TestCatalog_ListEntriesFilterSkipsRemainingAdmittedPrefix(t *testing.T) {
 	})}
 	c := &catalog.Catalog{Store: store}
 	var checked []string
-	entries, more, err := c.ListEntries(t.Context(), "repo", "main", "", "", "/", 10, catalog.WithEntryFilter(func(entry *catalog.DBEntry) (bool, error) {
+	entries, more, err := c.ListEntries(t.Context(), "repo", "main", catalog.ListEntriesParams{Prefix: "", After: "", Delimiter: "/", Limit: 10}, catalog.WithEntryFilter(func(entry *catalog.DBEntry) (bool, error) {
 		checked = append(checked, entry.Path)
 		return entry.Metadata["dcs:cls"] == "U", nil
 	}))
@@ -144,7 +144,7 @@ func TestCatalog_ListEntriesFilterPaginationAcrossDeniedRuns(t *testing.T) {
 	filter := catalog.WithEntryFilter(func(entry *catalog.DBEntry) (bool, error) {
 		return entry.Metadata["dcs:cls"] == "U", nil
 	})
-	entries, more, err := c.ListEntries(t.Context(), "repo", "main", "", "", "", 2, filter)
+	entries, more, err := c.ListEntries(t.Context(), "repo", "main", catalog.ListEntriesParams{Prefix: "", After: "", Delimiter: "", Limit: 2}, filter)
 	require.NoError(t, err)
 	require.True(t, more)
 	require.Equal(t, expected[:2], listingPaths(entries))
@@ -152,7 +152,7 @@ func TestCatalog_ListEntriesFilterPaginationAcrossDeniedRuns(t *testing.T) {
 	require.Greater(t, store.iterator.pages, 1)
 	require.Equal(t, 1, store.iterator.closes)
 
-	entries, more, err = c.ListEntries(t.Context(), "repo", "main", "", entries[len(entries)-1].Path, "", 2, filter)
+	entries, more, err = c.ListEntries(t.Context(), "repo", "main", catalog.ListEntriesParams{Prefix: "", After: entries[len(entries)-1].Path, Delimiter: "", Limit: 2}, filter)
 	require.NoError(t, err)
 	require.False(t, more)
 	require.Equal(t, expected[2:], listingPaths(entries))
@@ -178,7 +178,7 @@ func TestCatalog_ListEntriesFilterErrorsDiscardPartialResults(t *testing.T) {
 				}
 				return true, nil
 			})
-			entries, more, err := c.ListEntries(t.Context(), "repo", "main", "", "", "", 1, filter)
+			entries, more, err := c.ListEntries(t.Context(), "repo", "main", catalog.ListEntriesParams{Prefix: "", After: "", Delimiter: "", Limit: 1}, filter)
 			require.ErrorIs(t, err, failure)
 			require.Nil(t, entries)
 			require.False(t, more)
@@ -197,7 +197,7 @@ func TestCatalog_ListEntriesFilterCancellation(t *testing.T) {
 			store := &listingFilterStore{records: listingRecords(map[string]string{"a": "U", "b": "U", "c": "U", "d": "U"})}
 			c := &catalog.Catalog{Store: store}
 			checks := 0
-			entries, more, err := c.ListEntries(ctx, "repo", "main", "", "", "", 10, catalog.WithEntryFilter(func(_ *catalog.DBEntry) (bool, error) {
+			entries, more, err := c.ListEntries(ctx, "repo", "main", catalog.ListEntriesParams{Prefix: "", After: "", Delimiter: "", Limit: 10}, catalog.WithEntryFilter(func(_ *catalog.DBEntry) (bool, error) {
 				checks++
 				if checks == 3 {
 					cancel()

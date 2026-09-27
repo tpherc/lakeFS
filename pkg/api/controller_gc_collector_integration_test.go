@@ -144,13 +144,7 @@ func TestGCAssembledCollectorAgainstServer(t *testing.T) {
 		err := command.Run()
 		logPath := filepath.Join(t.TempDir(), "collector.log")
 		require.NoError(t, os.WriteFile(logPath, output.Bytes(), 0o600))
-		if err != nil {
-			text := output.String()
-			if len(text) > 18000 {
-				text = text[len(text)-18000:]
-			}
-			t.Fatalf("assembled collector (mark=%t sweep=%t) failed: %v\n%s", mark, sweep, err, text)
-		}
+		requireGCCollectorSuccess(t, err, mark, sweep, output.String())
 	}
 	exists := func(storageID, location string) bool {
 		t.Helper()
@@ -239,4 +233,15 @@ func gcCollectorMarkLocation(t *testing.T, endpoint string) string {
 	}
 	t.Fatal("fixture listing exceeded page limit")
 	return ""
+}
+
+func requireGCCollectorSuccess(t *testing.T, err error, mark, sweep bool, output string) {
+	t.Helper()
+	if err == nil {
+		return
+	}
+	if len(output) > 18000 {
+		output = output[len(output)-18000:]
+	}
+	t.Fatalf("assembled collector (mark=%t sweep=%t) failed: %v\n%s", mark, sweep, err, output)
 }

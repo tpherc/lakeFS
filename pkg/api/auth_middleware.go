@@ -54,7 +54,14 @@ func GenericAuthMiddleware(logger logging.Logger, authenticator auth.Authenticat
 	}, nil
 }
 
-func AuthMiddleware(logger logging.Logger, swagger *openapi3.T, authenticator auth.Authenticator, authService auth.Service, externalIdentityProvisioner *auth.ExternalIdentityProvisioner, sessionStore sessions.Store, oidcConfig *auth.OIDCConfig, cookieAuthConfig *auth.CookieAuthConfig) func(next http.Handler) http.Handler {
+// SessionAuthConfig contains the session store and provider settings used by API authentication.
+type SessionAuthConfig struct {
+	Store  sessions.Store
+	OIDC   *auth.OIDCConfig
+	Cookie *auth.CookieAuthConfig
+}
+
+func AuthMiddleware(logger logging.Logger, swagger *openapi3.T, authenticator auth.Authenticator, authService auth.Service, externalIdentityProvisioner *auth.ExternalIdentityProvisioner, sessionConfig SessionAuthConfig) func(next http.Handler) http.Handler {
 	router, err := legacy.NewRouter(swagger)
 	if err != nil {
 		panic(err)
@@ -71,7 +78,7 @@ func AuthMiddleware(logger logging.Logger, swagger *openapi3.T, authenticator au
 				writeAuthError(w, r, err, http.StatusBadRequest, err.Error())
 				return
 			}
-			result, err := checkSecurityRequirements(w, r, securityRequirements, logger, authenticator, authService, externalIdentityProvisioner, sessionStore, oidcConfig, cookieAuthConfig)
+			result, err := checkSecurityRequirements(w, r, securityRequirements, logger, authenticator, authService, externalIdentityProvisioner, sessionConfig.Store, sessionConfig.OIDC, sessionConfig.Cookie)
 			if err != nil {
 				writeAuthError(w, r, err, http.StatusUnauthorized, ErrAuthenticatingRequest.Error())
 				return

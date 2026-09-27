@@ -5,5 +5,5 @@
     } catch {
         // Storage may be unavailable; keep the default light theme.
     }
-    document.documentElement.setAttribute('data-bs-theme', darkMode ? 'dark' : 'light');
+    document.documentElement.dataset.bsTheme = darkMode ? 'dark' : 'light';
 })();

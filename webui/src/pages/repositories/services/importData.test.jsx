@@ -48,16 +48,13 @@ const ImportWrapper = ({ storageConfigs = storages, repositoryStorageID = 'home'
             <button
                 disabled={!valid}
                 onClick={() =>
-                    startImport(
-                        () => {},
-                        '',
-                        'Import',
-                        sourceRef.current.value,
-                        'repo',
-                        'main',
-                        {},
-                        storageID || undefined,
-                    )
+                    startImport(() => {}, 'repo', 'main', {
+                        source: sourceRef.current.value,
+                        destination: '',
+                        commitMessage: 'Import',
+                        metadata: {},
+                        storageID: storageID || undefined,
+                    })
                 }
             >
                 Start
@@ -98,7 +95,13 @@ test('switching source and back to home revalidates the URI and preserves each A
     expect(screen.queryByText('Repository default')).not.toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Primary · home' })).toHaveValue('');
     await user.click(start);
-    expect(create).toHaveBeenLastCalledWith('repo', 'main', 'gs://raw/prefix/', '', 'Import', {}, 'source');
+    expect(create).toHaveBeenLastCalledWith('repo', 'main', {
+        source: 'gs://raw/prefix/',
+        destination: '',
+        commitMessage: 'Import',
+        metadata: {},
+        storageID: 'source',
+    });
     await user.selectOptions(select, '');
     expect(start).toBeDisabled();
     expect(screen.getByText('Repository default')).toHaveClass('badge');
@@ -106,7 +109,13 @@ test('switching source and back to home revalidates the URI and preserves each A
     await user.type(source, 's3://raw/prefix/');
     expect(start).toBeEnabled();
     await user.click(start);
-    expect(create).toHaveBeenLastCalledWith('repo', 'main', 's3://raw/prefix/', '', 'Import', {}, undefined);
+    expect(create).toHaveBeenLastCalledWith('repo', 'main', {
+        source: 's3://raw/prefix/',
+        destination: '',
+        commitMessage: 'Import',
+        metadata: {},
+        storageID: undefined,
+    });
 });
 
 test('an unsupported repository backend stays disabled without selecting a different backend', () => {
@@ -143,5 +152,45 @@ test('a single legacy backend needs no selector and retains the implicit API bin
     expect(screen.queryByText('Repository default')).not.toBeInTheDocument();
     await user.type(screen.getByPlaceholderText('s3://bucket/'), 's3://raw/prefix/');
     await user.click(screen.getByRole('button', { name: 'Start' }));
-    expect(create).toHaveBeenCalledWith('repo', 'main', 's3://raw/prefix/', '', 'Import', {}, undefined);
+    expect(create).toHaveBeenCalledWith('repo', 'main', {
+        source: 's3://raw/prefix/',
+        destination: '',
+        commitMessage: 'Import',
+        metadata: {},
+        storageID: undefined,
+    });
 });
+
+test.each([
+    { options: {}, pathFields: {}, commitFields: {} },
+    {
+        options: { storageID: 'source', metadata: { imported_by: 'test' } },
+        pathFields: { storage_id: 'source' },
+        commitFields: { metadata: { imported_by: 'test' } },
+    },
+])(
+    'import options preserve the API request and resulting import ID: $options',
+    async ({ options, pathFields, commitFields }) => {
+        const fetchMock = vi
+            .spyOn(globalThis, 'fetch')
+            .mockResolvedValue(new Response(JSON.stringify({ id: 'import-id' }), { status: 202 }));
+        const setImportID = vi.fn();
+
+        await startImport(setImportID, 'repo', 'main', {
+            source: 's3://raw/prefix/',
+            destination: 'imported/',
+            commitMessage: 'Import data',
+            ...options,
+        });
+
+        expect(fetchMock).toHaveBeenCalledOnce();
+        const [url, request] = fetchMock.mock.calls[0];
+        expect(url).toBe('/api/v1/repositories/repo/branches/main/import');
+        expect(request.method).toBe('POST');
+        expect(JSON.parse(request.body)).toEqual({
+            paths: [{ path: 's3://raw/prefix/', destination: 'imported/', type: 'common_prefix', ...pathFields }],
+            commit: { message: 'Import data', ...commitFields },
+        });
+        expect(setImportID).toHaveBeenCalledWith('import-id');
+    },
+);

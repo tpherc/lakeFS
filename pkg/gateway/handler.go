@@ -234,28 +234,9 @@ func PathOperationHandler(sc *ServerContext, handler operations.PathOperationHan
 			return
 		}
 
-		var objectRead *operations.ObjectReadSnapshot
-		var authorizer auth.Authorizer = sc.authService
-		if reader, ok := handler.(operations.ObjectReadHandler); ok {
-			readPath, pathErr := reader.ReadObjectPath(req, repo.Name, refID, path)
-			if pathErr != nil {
-				_ = o.EncodeError(w, req, pathErr, gatewayerrors.ErrInvalidCopySource.ToAPIErr())
-				return
-			}
-			if readPath != nil {
-				prepared := prepareAuthorization(w, req, sc.authService, perms)
-				if prepared == nil {
-					return
-				}
-				authorizer = prepared
-				beforeMeta := time.Now()
-				entry, entryErr := sc.catalog.GetEntry(ctx, readPath.Repo, readPath.Reference, readPath.Path, catalog.GetEntryParams{})
-				o.Log(req).WithField("took", time.Since(beforeMeta)).WithError(entryErr).Debug("metadata operation to retrieve object done")
-				objectRead = &operations.ObjectReadSnapshot{Path: *readPath, Entry: entry, Err: entryErr}
-				if entryErr == nil {
-					addObjectReadMetadata(&perms, permissions.ObjectArn(readPath.Repo, readPath.Path), entry.Metadata)
-				}
-			}
+		authorizer, objectRead := sc.preparePathObjectRead(w, req, handler, &perms)
+		if authorizer == nil {
+			return
 		}
 
 		authOp := authorize(w, req, authorizer, perms)
@@ -284,6 +265,40 @@ func PathOperationHandler(sc *ServerContext, handler operations.PathOperationHan
 		}))
 		handler.Handle(w, req, operation)
 	})
+}
+
+func (sc *ServerContext) preparePathObjectRead(w http.ResponseWriter, req *http.Request, handler operations.PathOperationHandler, perms *permissions.Node) (auth.Authorizer, *operations.ObjectReadSnapshot) {
+	reader, ok := handler.(operations.ObjectReadHandler)
+	if !ok {
+		return sc.authService, nil
+	}
+
+	ctx := req.Context()
+	repo := ctx.Value(ContextKeyRepository).(*catalog.Repository)
+	refID := ctx.Value(ContextKeyRef).(string)
+	path := ctx.Value(ContextKeyPath).(string)
+	o := ctx.Value(ContextKeyOperation).(*operations.Operation)
+	readPath, err := reader.ReadObjectPath(req, repo.Name, refID, path)
+	if err != nil {
+		_ = o.EncodeError(w, req, err, gatewayerrors.ErrInvalidCopySource.ToAPIErr())
+		return nil, nil
+	}
+	if readPath == nil {
+		return sc.authService, nil
+	}
+
+	prepared := prepareAuthorization(w, req, sc.authService, *perms)
+	if prepared == nil {
+		return nil, nil
+	}
+	beforeMeta := time.Now()
+	entry, entryErr := sc.catalog.GetEntry(ctx, readPath.Repo, readPath.Reference, readPath.Path, catalog.GetEntryParams{})
+	o.Log(req).WithField("took", time.Since(beforeMeta)).WithError(entryErr).Debug("metadata operation to retrieve object done")
+	objectRead := &operations.ObjectReadSnapshot{Path: *readPath, Entry: entry, Err: entryErr}
+	if entryErr == nil {
+		addObjectReadMetadata(perms, permissions.ObjectArn(readPath.Repo, readPath.Path), entry.Metadata)
+	}
+	return prepared, objectRead
 }
 
 func prepareAuthorization(w http.ResponseWriter, req *http.Request, service auth.GatewayService, perms permissions.Node) *auth.PreparedAuthorization {

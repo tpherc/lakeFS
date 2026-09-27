@@ -162,6 +162,23 @@ const (
 	DefaultPathDelimiter = "/"
 )
 
+// ListEntriesParams controls grouping and pagination of a repository listing.
+type ListEntriesParams struct {
+	Prefix    string
+	After     string
+	Delimiter string
+	Limit     int
+}
+
+// CopyEntryParams describes the destination and metadata for an entry copy.
+type CopyEntryParams struct {
+	DestinationRepository string
+	DestinationBranch     string
+	DestinationPath       string
+	ReplaceMetadata       bool
+	Metadata              Metadata
+}
+
 type DiffParams struct {
 	Limit            int
 	After            string
@@ -1285,18 +1302,19 @@ func (c *Catalog) DeleteEntries(ctx context.Context, repositoryID string, branch
 	return c.Store.DeleteBatch(ctx, repository, branchID, keys, opts...)
 }
 
-func (c *Catalog) ListEntries(ctx context.Context, repositoryID string, reference string, prefix string, after string, delimiter string, limit int, opts ...ListEntriesOptionsFunc) ([]*DBEntry, bool, error) {
+func (c *Catalog) ListEntries(ctx context.Context, repositoryID string, reference string, params ListEntriesParams, opts ...ListEntriesOptionsFunc) ([]*DBEntry, bool, error) {
 	options := &ListEntriesOptions{}
 	for _, opt := range opts {
 		opt(options)
 	}
 	// normalize limit
+	limit := params.Limit
 	if limit < 0 || limit > ListEntriesLimitMax {
 		limit = ListEntriesLimitMax
 	}
-	prefixPath := Path(prefix)
-	afterPath := Path(after)
-	delimiterPath := Path(delimiter)
+	prefixPath := Path(params.Prefix)
+	afterPath := Path(params.After)
+	delimiterPath := Path(params.Delimiter)
 	refToList := graveler.Ref(reference)
 	if err := validator.Validate([]validator.ValidateArg{
 		{Name: "repository", Value: repositoryID, Fn: graveler.ValidateRepositoryID},
@@ -1978,7 +1996,7 @@ func (c *Catalog) Compare(ctx context.Context, repositoryID, leftReference strin
 	return listDiffHelper(ctx, it, params.Prefix, params.Delimiter, params.Limit, params.After, options.FilterFunc)
 }
 
-func (c *Catalog) DiffUncommitted(ctx context.Context, repositoryID, branch, prefix, delimiter string, limit int, after string, opts ...DiffOptionsFunc) (Differences, bool, error) {
+func (c *Catalog) DiffUncommitted(ctx context.Context, repositoryID, branch string, params DiffParams, opts ...DiffOptionsFunc) (Differences, bool, error) {
 	branchID := graveler.BranchID(branch)
 	if err := validator.Validate([]validator.ValidateArg{
 		{Name: "repository", Value: repositoryID, Fn: graveler.ValidateRepositoryID},
@@ -1998,7 +2016,7 @@ func (c *Catalog) DiffUncommitted(ctx context.Context, repositoryID, branch, pre
 	options := collectDiffOptions(opts)
 	it := newDiffListingIterator(iter, options)
 	defer it.Close()
-	return listDiffHelper(ctx, it, prefix, delimiter, limit, after, options.FilterFunc)
+	return listDiffHelper(ctx, it, params.Prefix, params.Delimiter, params.Limit, params.After, options.FilterFunc)
 }
 
 // GetStartPos returns a key that SeekGE will transform to a place start iterating on all elements in
@@ -3151,12 +3169,18 @@ func (c *Catalog) CopyEntry(ctx context.Context, srcRepository, srcRef, srcPath,
 		return nil, err
 	}
 
-	return c.CopyEntryFromSnapshot(ctx, srcRepository, srcRef, srcEntry, destRepository, destBranch, destPath, replaceSrcMetadata, metadata, opts...)
+	return c.CopyEntryFromSnapshot(ctx, srcRepository, srcRef, srcEntry, CopyEntryParams{
+		DestinationRepository: destRepository,
+		DestinationBranch:     destBranch,
+		DestinationPath:       destPath,
+		ReplaceMetadata:       replaceSrcMetadata,
+		Metadata:              metadata,
+	}, opts...)
 }
 
 // CopyEntryFromSnapshot copies the source entry already loaded and authorized by the caller.
 // It does not resolve the source path again, so a concurrent branch update cannot change the copied object.
-func (c *Catalog) CopyEntryFromSnapshot(ctx context.Context, srcRepository, srcRef string, srcEntry *DBEntry, destRepository, destBranch, destPath string, replaceSrcMetadata bool, metadata Metadata, opts ...graveler.SetOptionsFunc) (*DBEntry, error) {
+func (c *Catalog) CopyEntryFromSnapshot(ctx context.Context, srcRepository, srcRef string, srcEntry *DBEntry, params CopyEntryParams, opts ...graveler.SetOptionsFunc) (*DBEntry, error) {
 	// load repositories information for storage namespace
 	srcRepo, err := c.GetRepository(ctx, srcRepository)
 	if err != nil {
@@ -3165,8 +3189,8 @@ func (c *Catalog) CopyEntryFromSnapshot(ctx context.Context, srcRepository, srcR
 
 	// load destination repository information, if needed
 	destRepo := srcRepo
-	if srcRepository != destRepository {
-		destRepo, err = c.GetRepository(ctx, destRepository)
+	if srcRepository != params.DestinationRepository {
+		destRepo, err = c.GetRepository(ctx, params.DestinationRepository)
 		if err != nil {
 			return nil, err
 		}
@@ -3179,19 +3203,19 @@ func (c *Catalog) CopyEntryFromSnapshot(ctx context.Context, srcRepository, srcR
 	options := graveler.NewSetOptions(opts)
 	// Clone entry
 	if options.Shallow {
-		return c.cloneEntry(ctx, srcRepo, srcRef, srcEntry, destRepository, destBranch, destPath, replaceSrcMetadata, metadata, opts...)
+		return c.cloneEntry(ctx, srcRepo, srcRef, srcEntry, params.DestinationRepository, params.DestinationBranch, params.DestinationPath, params.ReplaceMetadata, params.Metadata, opts...)
 	}
 
 	// copy data to a new physical address
 	dstEntry := *srcEntry
 	dstEntry.Metadata = maps.Clone(srcEntry.Metadata)
-	dstEntry.Path = destPath
+	dstEntry.Path = params.DestinationPath
 	dstEntry.StorageID = ""
 	dstEntry.AddressType = AddressTypeRelative
 	dstEntry.PhysicalAddress = c.PathProvider.NewPath()
 
-	if replaceSrcMetadata {
-		dstEntry.Metadata = maps.Clone(metadata)
+	if params.ReplaceMetadata {
+		dstEntry.Metadata = maps.Clone(params.Metadata)
 	}
 
 	srcObject, err := block.NewObjectPointer(srcEntry.StorageID, srcRepo.StorageID, srcRepo.StorageNamespace, srcEntry.PhysicalAddress, srcEntry.AddressType.ToIdentifierType())
@@ -3215,7 +3239,7 @@ func (c *Catalog) CopyEntryFromSnapshot(ctx context.Context, srcRepository, srcR
 	dstEntry.CreationDate = time.Now()
 
 	// create entry for the final copy
-	err = c.CreateEntry(ctx, destRepository, destBranch, dstEntry, opts...)
+	err = c.CreateEntry(ctx, params.DestinationRepository, params.DestinationBranch, dstEntry, opts...)
 	if err != nil {
 		return nil, err
 	}

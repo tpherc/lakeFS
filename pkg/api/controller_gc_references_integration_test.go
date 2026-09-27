@@ -34,186 +34,215 @@ import (
 // checks selected credentials but does not implement provider signature validation.
 func newGCReferencesS3Endpoint(t *testing.T) *httptest.Server {
 	t.Helper()
-	var mu sync.RWMutex
-	type object struct {
-		content  []byte
-		modified time.Time
-	}
-	objects := make(map[string]object)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.Header.Get("Authorization"), "gc-access-key/") {
-			http.Error(w, "unexpected credentials", http.StatusForbidden)
-			return
-		}
-		bucket := strings.Trim(r.URL.Path, "/")
-		isBucket := bucket != "" && !strings.Contains(bucket, "/")
-		if isBucket && r.Method == http.MethodHead {
-			w.Header().Set("x-amz-bucket-region", "us-east-1")
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if isBucket && r.Method == http.MethodGet {
-			w.Header().Set("Content-Type", "application/xml")
-			if r.URL.Query().Has("location") {
-				_, _ = io.WriteString(w, `<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">us-east-1</LocationConstraint>`)
-				return
-			}
-			prefix, delimiter := r.URL.Query().Get("prefix"), r.URL.Query().Get("delimiter")
-			after := r.URL.Query().Get("continuation-token")
-			if after == "" {
-				after = r.URL.Query().Get("marker")
-			}
-			type item struct {
-				Key          string
-				LastModified string
-				ETag         string
-				Size         int
-				StorageClass string
-			}
-			type commonPrefix struct{ Prefix string }
-			result := struct {
-				XMLName               xml.Name `xml:"ListBucketResult"`
-				Name                  string
-				Prefix                string
-				Delimiter             string
-				MaxKeys               int
-				KeyCount              int
-				IsTruncated           bool
-				NextContinuationToken string `xml:",omitempty"`
-				NextMarker            string `xml:",omitempty"`
-				Contents              []item
-				CommonPrefixes        []commonPrefix
-			}{Name: bucket, Prefix: prefix, Delimiter: delimiter, MaxKeys: 2}
-			if requested, err := strconv.Atoi(r.URL.Query().Get("max-keys")); err == nil && requested > 0 && requested < result.MaxKeys {
-				result.MaxKeys = requested
-			}
-			mu.RLock()
-			keys := make([]string, 0)
-			for path := range objects {
-				key, ok := strings.CutPrefix(path, "/"+bucket+"/")
-				if ok && strings.HasPrefix(key, prefix) && key > after {
-					keys = append(keys, key)
-				}
-			}
-			sort.Strings(keys)
-			seen := make(map[string]bool)
-			for index, key := range keys {
-				if delimiter != "" && strings.Contains(strings.TrimPrefix(key, prefix), delimiter) {
-					part, _, _ := strings.Cut(strings.TrimPrefix(key, prefix), delimiter)
-					value := prefix + part + delimiter
-					if seen[value] {
-						continue
-					}
-					seen[value] = true
-					result.CommonPrefixes = append(result.CommonPrefixes, commonPrefix{value})
-				} else {
-					object := objects["/"+bucket+"/"+key]
-					result.Contents = append(result.Contents, item{key, object.modified.UTC().Format(time.RFC3339), `"` + gcReferencesS3ETag(object.content) + `"`, len(object.content), "STANDARD"})
-				}
-				result.KeyCount++
-				if result.KeyCount == result.MaxKeys && index+1 < len(keys) {
-					result.IsTruncated, result.NextContinuationToken, result.NextMarker = true, key, key
-					break
-				}
-			}
-			mu.RUnlock()
-			_ = xml.NewEncoder(w).Encode(result)
-			return
-		}
-		if isBucket && r.Method == http.MethodPost && r.URL.Query().Has("delete") {
-			var request struct {
-				Objects []struct{ Key string } `xml:"Object"`
-			}
-			if err := xml.NewDecoder(r.Body).Decode(&request); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			result := struct {
-				XMLName xml.Name `xml:"DeleteResult"`
-				Deleted []struct{ Key string }
-			}{}
-			mu.Lock()
-			for _, object := range request.Objects {
-				delete(objects, "/"+bucket+"/"+object.Key)
-				result.Deleted = append(result.Deleted, struct{ Key string }{object.Key})
-			}
-			mu.Unlock()
-			w.Header().Set("Content-Type", "application/xml")
-			_ = xml.NewEncoder(w).Encode(result)
-			return
-		}
-		if r.Method == http.MethodPut {
-			var payload io.Reader = r.Body
-			if strings.Contains(r.Header.Get("Content-Encoding"), "aws-chunked") || strings.HasPrefix(r.Header.Get("X-Amz-Content-Sha256"), "STREAMING-") {
-				// The HTTP server removes transfer framing, but AWS payload framing
-				// remains inside the body. Chunk signatures are not verified here.
-				payload = httputil.NewChunkedReader(r.Body)
-			}
-			content, err := io.ReadAll(payload)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			if expected := r.Header.Get("Content-MD5"); expected != "" {
-				sum := md5.Sum(content)
-				actual := base64.StdEncoding.EncodeToString(sum[:])
-				if actual != expected {
-					t.Logf("fixture PUT integrity mismatch: encoding=%q sha-kind=%q decoded-length=%q size=%d", r.Header.Get("Content-Encoding"), r.Header.Get("X-Amz-Content-Sha256"), r.Header.Get("X-Amz-Decoded-Content-Length"), len(content))
-					http.Error(w, "fixture payload digest mismatch", http.StatusBadRequest)
-					return
-				}
-			}
-			modified := time.Now().UTC()
-			if requested := r.Header.Get("X-Test-Modified-At"); requested != "" {
-				modified, err = time.Parse(time.RFC3339, requested)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
-				}
-			}
-			mu.Lock()
-			objects[r.URL.Path] = object{content, modified}
-			mu.Unlock()
-			w.Header().Set("ETag", `"`+gcReferencesS3ETag(content)+`"`)
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		mu.RLock()
-		stored, found := objects[r.URL.Path]
-		mu.RUnlock()
-		content := stored.content
-		if !found {
-			w.Header().Set("Content-Type", "application/xml")
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = io.WriteString(w, "<Error><Code>NoSuchKey</Code><Message>Object not found</Message></Error>")
-			return
-		}
-		w.Header().Set("ETag", `"`+gcReferencesS3ETag(content)+`"`)
-		w.Header().Set("Last-Modified", stored.modified.UTC().Format(http.TimeFormat))
-		w.Header().Set("Content-Type", "application/octet-stream")
-		status := http.StatusOK
-		if requested := r.Header.Get("Range"); requested != "" {
-			rng, err := lakefshttp.ParseRange(requested, int64(len(content)))
-			if err != nil {
-				w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
-				return
-			}
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", rng.StartOffset, rng.EndOffset, len(content)))
-			content = content[rng.StartOffset : rng.EndOffset+1]
-			status = http.StatusPartialContent
-		}
-		w.Header().Set("Content-Length", strconv.Itoa(len(content)))
-		w.WriteHeader(status)
-		if r.Method == http.MethodGet {
-			_, _ = w.Write(content)
-		}
-	}))
+	endpoint := &gcReferencesS3Endpoint{t: t, objects: make(map[string]gcReferencesS3Object)}
+	server := httptest.NewServer(http.HandlerFunc(endpoint.serveHTTP))
 	t.Cleanup(server.Close)
 	return server
+}
+
+type gcReferencesS3Object struct {
+	content  []byte
+	modified time.Time
+}
+
+type gcReferencesS3Endpoint struct {
+	t       *testing.T
+	mu      sync.RWMutex
+	objects map[string]gcReferencesS3Object
+}
+
+func (s *gcReferencesS3Endpoint) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	if !strings.Contains(r.Header.Get("Authorization"), "gc-access-key/") {
+		http.Error(w, "unexpected credentials", http.StatusForbidden)
+		return
+	}
+	bucket := strings.Trim(r.URL.Path, "/")
+	isBucket := bucket != "" && !strings.Contains(bucket, "/")
+	switch {
+	case isBucket && r.Method == http.MethodHead:
+		w.Header().Set("x-amz-bucket-region", "us-east-1")
+		w.WriteHeader(http.StatusOK)
+	case isBucket && r.Method == http.MethodGet:
+		s.serveBucket(w, r, bucket)
+	case isBucket && r.Method == http.MethodPost && r.URL.Query().Has("delete"):
+		s.deleteObjects(w, r, bucket)
+	case r.Method == http.MethodPut:
+		s.putObject(w, r)
+	case r.Method == http.MethodGet || r.Method == http.MethodHead:
+		s.readObject(w, r)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+type gcReferencesS3ListItem struct {
+	Key          string
+	LastModified string
+	ETag         string
+	Size         int
+	StorageClass string
+}
+
+type gcReferencesS3CommonPrefix struct{ Prefix string }
+
+type gcReferencesS3ListResult struct {
+	XMLName               xml.Name `xml:"ListBucketResult"`
+	Name                  string
+	Prefix                string
+	Delimiter             string
+	MaxKeys               int
+	KeyCount              int
+	IsTruncated           bool
+	NextContinuationToken string `xml:",omitempty"`
+	NextMarker            string `xml:",omitempty"`
+	Contents              []gcReferencesS3ListItem
+	CommonPrefixes        []gcReferencesS3CommonPrefix
+}
+
+func (s *gcReferencesS3Endpoint) serveBucket(w http.ResponseWriter, r *http.Request, bucket string) {
+	w.Header().Set("Content-Type", "application/xml")
+	if r.URL.Query().Has("location") {
+		_, _ = io.WriteString(w, `<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">us-east-1</LocationConstraint>`)
+		return
+	}
+	result := gcReferencesS3ListResult{Name: bucket, Prefix: r.URL.Query().Get("prefix"), Delimiter: r.URL.Query().Get("delimiter"), MaxKeys: 2}
+	if requested, err := strconv.Atoi(r.URL.Query().Get("max-keys")); err == nil && requested > 0 && requested < result.MaxKeys {
+		result.MaxKeys = requested
+	}
+	after := r.URL.Query().Get("continuation-token")
+	if after == "" {
+		after = r.URL.Query().Get("marker")
+	}
+	s.populateListing(&result, after)
+	_ = xml.NewEncoder(w).Encode(result)
+}
+
+func gcReferencesS3ListingKeys(objects map[string]gcReferencesS3Object, bucket, prefix, after string) []string {
+	keys := make([]string, 0)
+	for path := range objects {
+		key, ok := strings.CutPrefix(path, "/"+bucket+"/")
+		if ok && strings.HasPrefix(key, prefix) && key > after {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func (s *gcReferencesS3Endpoint) populateListing(result *gcReferencesS3ListResult, after string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	keys := gcReferencesS3ListingKeys(s.objects, result.Name, result.Prefix, after)
+	seen := make(map[string]bool)
+	for index, key := range keys {
+		if result.Delimiter != "" && strings.Contains(strings.TrimPrefix(key, result.Prefix), result.Delimiter) {
+			part, _, _ := strings.Cut(strings.TrimPrefix(key, result.Prefix), result.Delimiter)
+			value := result.Prefix + part + result.Delimiter
+			if seen[value] {
+				continue
+			}
+			seen[value] = true
+			result.CommonPrefixes = append(result.CommonPrefixes, gcReferencesS3CommonPrefix{value})
+		} else {
+			object := s.objects["/"+result.Name+"/"+key]
+			result.Contents = append(result.Contents, gcReferencesS3ListItem{key, object.modified.UTC().Format(time.RFC3339), `"` + gcReferencesS3ETag(object.content) + `"`, len(object.content), "STANDARD"})
+		}
+		result.KeyCount++
+		if result.KeyCount == result.MaxKeys && index+1 < len(keys) {
+			result.IsTruncated, result.NextContinuationToken, result.NextMarker = true, key, key
+			break
+		}
+	}
+}
+
+func (s *gcReferencesS3Endpoint) deleteObjects(w http.ResponseWriter, r *http.Request, bucket string) {
+	var request struct {
+		Objects []struct{ Key string } `xml:"Object"`
+	}
+	if err := xml.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	result := struct {
+		XMLName xml.Name `xml:"DeleteResult"`
+		Deleted []struct{ Key string }
+	}{}
+	s.mu.Lock()
+	for _, object := range request.Objects {
+		delete(s.objects, "/"+bucket+"/"+object.Key)
+		result.Deleted = append(result.Deleted, struct{ Key string }{object.Key})
+	}
+	s.mu.Unlock()
+	w.Header().Set("Content-Type", "application/xml")
+	_ = xml.NewEncoder(w).Encode(result)
+}
+
+func (s *gcReferencesS3Endpoint) putObject(w http.ResponseWriter, r *http.Request) {
+	var payload io.Reader = r.Body
+	if strings.Contains(r.Header.Get("Content-Encoding"), "aws-chunked") || strings.HasPrefix(r.Header.Get("X-Amz-Content-Sha256"), "STREAMING-") {
+		// The HTTP server removes transfer framing, but AWS payload framing
+		// remains inside the body. Chunk signatures are not verified here.
+		payload = httputil.NewChunkedReader(r.Body)
+	}
+	content, err := io.ReadAll(payload)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if expected := r.Header.Get("Content-MD5"); expected != "" {
+		sum := md5.Sum(content)
+		actual := base64.StdEncoding.EncodeToString(sum[:])
+		if actual != expected {
+			s.t.Logf("fixture PUT integrity mismatch: encoding=%q sha-kind=%q decoded-length=%q size=%d", r.Header.Get("Content-Encoding"), r.Header.Get("X-Amz-Content-Sha256"), r.Header.Get("X-Amz-Decoded-Content-Length"), len(content))
+			http.Error(w, "fixture payload digest mismatch", http.StatusBadRequest)
+			return
+		}
+	}
+	modified := time.Now().UTC()
+	if requested := r.Header.Get("X-Test-Modified-At"); requested != "" {
+		modified, err = time.Parse(time.RFC3339, requested)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	s.mu.Lock()
+	s.objects[r.URL.Path] = gcReferencesS3Object{content, modified}
+	s.mu.Unlock()
+	w.Header().Set("ETag", `"`+gcReferencesS3ETag(content)+`"`)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *gcReferencesS3Endpoint) readObject(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	stored, found := s.objects[r.URL.Path]
+	s.mu.RUnlock()
+	content := stored.content
+	if !found {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, "<Error><Code>NoSuchKey</Code><Message>Object not found</Message></Error>")
+		return
+	}
+	w.Header().Set("ETag", `"`+gcReferencesS3ETag(content)+`"`)
+	w.Header().Set("Last-Modified", stored.modified.UTC().Format(http.TimeFormat))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	status := http.StatusOK
+	if requested := r.Header.Get("Range"); requested != "" {
+		rng, err := lakefshttp.ParseRange(requested, int64(len(content)))
+		if err != nil {
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", rng.StartOffset, rng.EndOffset, len(content)))
+		content = content[rng.StartOffset : rng.EndOffset+1]
+		status = http.StatusPartialContent
+	}
+	w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+	w.WriteHeader(status)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(content)
+	}
 }
 
 func setupGCReferencesAPI(t *testing.T) (apigen.ClientWithResponsesInterface, *dependencies, *catalog.Repository) {
@@ -272,103 +301,108 @@ func TestGCReferencesAPIManifest(t *testing.T) {
 			name = "cross repository committed and staged references"
 		}
 		t.Run(name, func(t *testing.T) {
-			client, deps, owner := setupGCReferencesAPI(t)
-			ctx := t.Context()
-			var expected []string
-			if crossRepository {
-				view, err := deps.catalog.CreateRepository(ctx, testUniqueRepoName(), "view-store", "mem://views/repository", "main", false)
-				require.NoError(t, err)
-				for _, path := range []string{"committed", "staged"} {
-					entry := catalog.NewDBEntryBuilder().Path(path).StorageID("home").AddressType(catalog.AddressTypeFull).
-						PhysicalAddress(owner.StorageNamespace + "/data/" + path).CreationDate(time.Now()).Checksum("etag").Size(1).Build()
-					require.NoError(t, deps.catalog.CreateEntry(ctx, view.Name, "main", entry))
-					expected = append(expected, "data/"+path)
-					if path == "committed" {
-						committed, err := client.CommitWithResponse(ctx, view.Name, "main", &apigen.CommitParams{}, apigen.CommitJSONRequestBody{Message: "retain owner object"})
-						verifyResponseOK(t, committed, err)
-					}
-				}
-				// Exercise the existing catalog clone helper; Community HTTP shallow
-				// copy support and its restrictions remain unchanged.
-				clone, err := deps.catalog.CopyEntry(ctx, view.Name, "main", "staged", view.Name, "main", "shallow-staged", false, nil, func(options *graveler.SetOptions) { options.Shallow = true })
-				require.NoError(t, err)
-				require.Equal(t, "home", clone.StorageID)
-				require.Equal(t, owner.StorageNamespace+"/data/staged", clone.PhysicalAddress)
-				deleted, err := client.DeleteObjectWithResponse(ctx, view.Name, "main", &apigen.DeleteObjectParams{Path: "staged"})
-				verifyResponseOK(t, deleted, err)
-				_, err = deps.catalog.CreateBranch(ctx, view.Name, "hidden", "main", graveler.WithHidden(true))
-				require.NoError(t, err)
-				hidden := catalog.NewDBEntryBuilder().Path("hidden-reference").StorageID("home").AddressType(catalog.AddressTypeFull).
-					PhysicalAddress(owner.StorageNamespace + "/data/hidden").CreationDate(time.Now()).Checksum("etag").Size(1).Build()
-				require.NoError(t, deps.catalog.CreateEntry(ctx, view.Name, "hidden", hidden))
-				branches, _, err := deps.catalog.ListBranches(ctx, view.Name, "", 10, "")
-				require.NoError(t, err)
-				require.Len(t, branches, 1, "the protection fixture must include a branch hidden from normal listings")
-				expected = append(expected, "data/hidden")
-				external := catalog.NewDBEntryBuilder().Path("outside").StorageID("home").AddressType(catalog.AddressTypeFull).
-					PhysicalAddress("s3://gc-bucket/ownership/data/object").CreationDate(time.Now()).Checksum("etag").Size(1).Build()
-				require.NoError(t, deps.catalog.CreateEntry(ctx, view.Name, "main", external))
-			}
-			startedBefore := time.Now().UTC()
-			started, err := client.PrepareGarbageCollectionReferencesAsyncWithResponse(ctx, owner.Name, apigen.PrepareGarbageCollectionReferencesAsyncJSONRequestBody{})
-			require.NoError(t, err)
-			require.Equal(t, http.StatusAccepted, started.StatusCode(), string(started.Body))
-			require.NotNil(t, started.JSON202)
-			status := waitGCReferencesAPI(t, client, owner.Name, started.JSON202.Id)
-			require.Nil(t, status.Error)
-			require.NotNil(t, status.Result)
-			require.Equal(t, started.JSON202.Id, status.TaskId)
-			require.Contains(t, status.Result.ManifestLocation, started.JSON202.Id)
-			require.True(t, strings.HasPrefix(status.Result.ManifestLocation, owner.StorageNamespace+"/"))
-			data := readGCReferencesArtifact(t, deps, status.Result.ManifestLocation)
-			require.Equal(t, status.Result.ManifestSha256, gcReferencesAPIDigest(data))
-			var manifest catalog.GCReferencesManifest
-			require.NoError(t, json.Unmarshal(data, &manifest))
-			require.Equal(t, catalog.GCReferencesSchemaVersion, manifest.SchemaVersion)
-			require.Equal(t, "installation", manifest.Scope)
-			require.Equal(t, status.TaskId, manifest.TaskID)
-			require.Equal(t, status.TaskId, manifest.RunID)
-			require.Equal(t, owner.Name, manifest.RepositoryID)
-			require.NotEmpty(t, manifest.RepositoryInstanceUID)
-			require.Equal(t, "home", manifest.StorageID)
-			require.Equal(t, owner.StorageNamespace, manifest.StorageNamespace)
-			require.Equal(t, deps.catalog.GCOwnershipFingerprint(), manifest.OwnershipFingerprint)
-			require.Equal(t, catalog.GCOwnershipResolverVersion, manifest.OwnershipResolverVersion)
-			require.Equal(t, int64(86400), manifest.MinimumAgeSeconds)
-			require.Equal(t, 24*time.Hour, manifest.StartedAt.Sub(manifest.CutoffTime))
-			require.False(t, manifest.StartedAt.Before(startedBefore))
-			require.False(t, manifest.CompletedAt.Before(manifest.StartedAt))
-			require.Equal(t, status.Result.ExpiresAt, manifest.ExpiresAt)
-			require.Equal(t, catalog.GCReferencesLifetime, manifest.ExpiresAt.Sub(manifest.CompletedAt))
-			require.Equal(t, "s3", manifest.Target.Provider)
-			require.Equal(t, "gc-bucket", manifest.Target.Bucket)
-			require.Equal(t, "owner/", manifest.Target.NamespacePrefix)
-			var addresses []string
-			for _, part := range manifest.Parts {
-				partData := readGCReferencesArtifact(t, deps, part.Location)
-				require.Equal(t, part.SHA256, gcReferencesAPIDigest(partData))
-				require.Equal(t, part.SizeBytes, int64(len(partData)))
-				file := buffer.NewBufferFileFromBytes(partData)
-				parquet, err := reader.NewParquetReader(file, new(gcReferencesAPIRow), 1)
-				require.NoError(t, err)
-				require.Equal(t, part.RowCount, parquet.GetNumRows())
-				rows := make([]gcReferencesAPIRow, part.RowCount)
-				require.NoError(t, parquet.Read(&rows))
-				parquet.ReadStop()
-				require.NoError(t, file.Close())
-				for _, row := range rows {
-					addresses = append(addresses, row.PhysicalAddress)
-				}
-			}
-			require.ElementsMatch(t, expected, addresses)
-			require.Equal(t, int64(len(expected)), manifest.TotalRows)
-			if !crossRepository {
-				require.Empty(t, manifest.Parts, "successful empty protection is explicit")
-				require.Equal(t, int64(1), manifest.SourceCount)
-			} else {
-				require.Equal(t, int64(2), manifest.SourceCount)
-			}
+			testGCReferencesAPIManifest(t, crossRepository)
 		})
+	}
+}
+
+func testGCReferencesAPIManifest(t *testing.T, crossRepository bool) {
+	t.Helper()
+	client, deps, owner := setupGCReferencesAPI(t)
+	ctx := t.Context()
+	var expected []string
+	if crossRepository {
+		view, err := deps.catalog.CreateRepository(ctx, testUniqueRepoName(), "view-store", "mem://views/repository", "main", false)
+		require.NoError(t, err)
+		for _, path := range []string{"committed", "staged"} {
+			entry := catalog.NewDBEntryBuilder().Path(path).StorageID("home").AddressType(catalog.AddressTypeFull).
+				PhysicalAddress(owner.StorageNamespace + "/data/" + path).CreationDate(time.Now()).Checksum("etag").Size(1).Build()
+			require.NoError(t, deps.catalog.CreateEntry(ctx, view.Name, "main", entry))
+			expected = append(expected, "data/"+path)
+			if path == "committed" {
+				committed, err := client.CommitWithResponse(ctx, view.Name, "main", &apigen.CommitParams{}, apigen.CommitJSONRequestBody{Message: "retain owner object"})
+				verifyResponseOK(t, committed, err)
+			}
+		}
+		// Exercise the existing catalog clone helper; Community HTTP shallow
+		// copy support and its restrictions remain unchanged.
+		clone, err := deps.catalog.CopyEntry(ctx, view.Name, "main", "staged", view.Name, "main", "shallow-staged", false, nil, func(options *graveler.SetOptions) { options.Shallow = true })
+		require.NoError(t, err)
+		require.Equal(t, "home", clone.StorageID)
+		require.Equal(t, owner.StorageNamespace+"/data/staged", clone.PhysicalAddress)
+		deleted, err := client.DeleteObjectWithResponse(ctx, view.Name, "main", &apigen.DeleteObjectParams{Path: "staged"})
+		verifyResponseOK(t, deleted, err)
+		_, err = deps.catalog.CreateBranch(ctx, view.Name, "hidden", "main", graveler.WithHidden(true))
+		require.NoError(t, err)
+		hidden := catalog.NewDBEntryBuilder().Path("hidden-reference").StorageID("home").AddressType(catalog.AddressTypeFull).
+			PhysicalAddress(owner.StorageNamespace + "/data/hidden").CreationDate(time.Now()).Checksum("etag").Size(1).Build()
+		require.NoError(t, deps.catalog.CreateEntry(ctx, view.Name, "hidden", hidden))
+		branches, _, err := deps.catalog.ListBranches(ctx, view.Name, "", 10, "")
+		require.NoError(t, err)
+		require.Len(t, branches, 1, "the protection fixture must include a branch hidden from normal listings")
+		expected = append(expected, "data/hidden")
+		external := catalog.NewDBEntryBuilder().Path("outside").StorageID("home").AddressType(catalog.AddressTypeFull).
+			PhysicalAddress("s3://gc-bucket/ownership/data/object").CreationDate(time.Now()).Checksum("etag").Size(1).Build()
+		require.NoError(t, deps.catalog.CreateEntry(ctx, view.Name, "main", external))
+	}
+	startedBefore := time.Now().UTC()
+	started, err := client.PrepareGarbageCollectionReferencesAsyncWithResponse(ctx, owner.Name, apigen.PrepareGarbageCollectionReferencesAsyncJSONRequestBody{})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusAccepted, started.StatusCode(), string(started.Body))
+	require.NotNil(t, started.JSON202)
+	status := waitGCReferencesAPI(t, client, owner.Name, started.JSON202.Id)
+	require.Nil(t, status.Error)
+	require.NotNil(t, status.Result)
+	require.Equal(t, started.JSON202.Id, status.TaskId)
+	require.Contains(t, status.Result.ManifestLocation, started.JSON202.Id)
+	require.True(t, strings.HasPrefix(status.Result.ManifestLocation, owner.StorageNamespace+"/"))
+	data := readGCReferencesArtifact(t, deps, status.Result.ManifestLocation)
+	require.Equal(t, status.Result.ManifestSha256, gcReferencesAPIDigest(data))
+	var manifest catalog.GCReferencesManifest
+	require.NoError(t, json.Unmarshal(data, &manifest))
+	require.Equal(t, catalog.GCReferencesSchemaVersion, manifest.SchemaVersion)
+	require.Equal(t, "installation", manifest.Scope)
+	require.Equal(t, status.TaskId, manifest.TaskID)
+	require.Equal(t, status.TaskId, manifest.RunID)
+	require.Equal(t, owner.Name, manifest.RepositoryID)
+	require.NotEmpty(t, manifest.RepositoryInstanceUID)
+	require.Equal(t, "home", manifest.StorageID)
+	require.Equal(t, owner.StorageNamespace, manifest.StorageNamespace)
+	require.Equal(t, deps.catalog.GCOwnershipFingerprint(), manifest.OwnershipFingerprint)
+	require.Equal(t, catalog.GCOwnershipResolverVersion, manifest.OwnershipResolverVersion)
+	require.Equal(t, int64(86400), manifest.MinimumAgeSeconds)
+	require.Equal(t, 24*time.Hour, manifest.StartedAt.Sub(manifest.CutoffTime))
+	require.False(t, manifest.StartedAt.Before(startedBefore))
+	require.False(t, manifest.CompletedAt.Before(manifest.StartedAt))
+	require.Equal(t, status.Result.ExpiresAt, manifest.ExpiresAt)
+	require.Equal(t, catalog.GCReferencesLifetime, manifest.ExpiresAt.Sub(manifest.CompletedAt))
+	require.Equal(t, "s3", manifest.Target.Provider)
+	require.Equal(t, "gc-bucket", manifest.Target.Bucket)
+	require.Equal(t, "owner/", manifest.Target.NamespacePrefix)
+	var addresses []string
+	for _, part := range manifest.Parts {
+		partData := readGCReferencesArtifact(t, deps, part.Location)
+		require.Equal(t, part.SHA256, gcReferencesAPIDigest(partData))
+		require.Equal(t, part.SizeBytes, int64(len(partData)))
+		file := buffer.NewBufferFileFromBytes(partData)
+		parquet, err := reader.NewParquetReader(file, new(gcReferencesAPIRow), 1)
+		require.NoError(t, err)
+		require.Equal(t, part.RowCount, parquet.GetNumRows())
+		rows := make([]gcReferencesAPIRow, part.RowCount)
+		require.NoError(t, parquet.Read(&rows))
+		parquet.ReadStop()
+		require.NoError(t, file.Close())
+		for _, row := range rows {
+			addresses = append(addresses, row.PhysicalAddress)
+		}
+	}
+	require.ElementsMatch(t, expected, addresses)
+	require.Equal(t, int64(len(expected)), manifest.TotalRows)
+	if !crossRepository {
+		require.Empty(t, manifest.Parts, "successful empty protection is explicit")
+		require.Equal(t, int64(1), manifest.SourceCount)
+	} else {
+		require.Equal(t, int64(2), manifest.SourceCount)
 	}
 }
 

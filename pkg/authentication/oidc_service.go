@@ -23,6 +23,7 @@ const (
 	OIDCLoginPath = "/oidc/login"
 
 	oidcDefaultPostLoginTarget = "/"
+	oidcLoginPreparationError  = "failed to prepare OIDC login"
 )
 
 type OIDCService struct {
@@ -177,7 +178,7 @@ func (s *OIDCService) loginHandler(sessionStore sessions.Store) http.HandlerFunc
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := s.clearLoginSessions(w, r, sessionStore); err != nil {
 			s.logger.WithError(err).Error("failed to clear existing auth sessions")
-			http.Error(w, "failed to prepare OIDC login", http.StatusInternalServerError)
+			http.Error(w, oidcLoginPreparationError, http.StatusInternalServerError)
 			return
 		}
 
@@ -195,12 +196,12 @@ func (s *OIDCService) loginHandler(sessionStore sessions.Store) http.HandlerFunc
 		})
 		if err != nil {
 			s.logger.WithError(err).Error("failed to create OIDC login")
-			http.Error(w, "failed to prepare OIDC login", http.StatusInternalServerError)
+			http.Error(w, oidcLoginPreparationError, http.StatusInternalServerError)
 			return
 		}
 		if err := (oidcSessionStore{store: sessionStore}).SaveTransaction(w, r, transaction); err != nil {
 			s.logger.WithError(err).Error("failed to save OIDC login transaction")
-			http.Error(w, "failed to prepare OIDC login", http.StatusInternalServerError)
+			http.Error(w, oidcLoginPreparationError, http.StatusInternalServerError)
 			return
 		}
 		http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
