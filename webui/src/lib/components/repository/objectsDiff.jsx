@@ -152,7 +152,7 @@ const ContentDiff = ({
             leftSize={leftSize}
             rightSize={rightSize}
             diffType={diffType}
-            settings={settings.darkMode}
+            isDarkMode={settings.darkMode}
         />
     );
 
@@ -185,8 +185,8 @@ const TextDiff = ({
         <div>
             <DiffSizeReport leftSize={leftSize} rightSize={rightSize} diffType={diffType} />
             <ReactDiffViewer
-                oldValue={left?.response}
-                newValue={right?.response}
+                oldValue={left?.response ?? ''}
+                newValue={right?.response ?? ''}
                 splitView={false}
                 useDarkTheme={isDarkMode}
                 compareMethod={DiffMethod.WORDS}
