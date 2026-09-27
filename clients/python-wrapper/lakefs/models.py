@@ -93,6 +93,11 @@ class ObjectInfo(LenientNamedTuple):
     size_bytes: Optional[int] = None
     metadata: Optional[dict[str, str]] = None
     content_type: Optional[str] = None
+    storage_id: Optional[str] = None
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("storage_id", None)
+        super().__init__(**kwargs)
 
     def __repr__(self):
         return f'ObjectInfo(path="{self.path}")'

@@ -220,6 +220,7 @@ type GetEntryParams struct {
 }
 
 type WriteRangeRequest struct {
+	StorageID         string
 	SourceURI         string
 	Prepend           string
 	After             string
@@ -252,6 +253,7 @@ type Catalog struct {
 	UGCPrepareInterval      time.Duration
 	signingKey              config.SecureString
 	errorToStatusCodeAndMsg ErrorToStatusCodeAndMsg
+	ownership               storageOwnership
 	instanceID              string          // unique ID for this server process
 	activeTasks             stdatomic.Int64 // number of tasks currently queued or running
 }
@@ -274,6 +276,7 @@ const (
 )
 
 type ImportPath struct {
+	StorageID   string
 	Path        string
 	Destination string
 	Type        ImportPathType
@@ -447,6 +450,7 @@ func New(ctx context.Context, cfg Config) (*Catalog, error) {
 		signingKey:              cfg.Config.StorageConfig().SigningKey(),
 		errorToStatusCodeAndMsg: errToStatusFunc,
 		instanceID:              xid.New().String(),
+		ownership:               newStorageOwnership(cfg.Config.StorageConfig()),
 	}
 	go cat.runInstanceHeartbeat(heartbeatCtx)
 	return cat, nil
@@ -1143,6 +1147,7 @@ func (c *Catalog) UpdateEntryUserMetadata(ctx context.Context, repositoryID, bra
 func newEntryFromCatalogEntry(entry DBEntry) *Entry {
 	ent := &Entry{
 		Address:      entry.PhysicalAddress,
+		StorageId:    entry.StorageID,
 		AddressType:  addressTypeToProto(entry.AddressType),
 		Metadata:     entry.Metadata,
 		LastModified: timestamppb.New(entry.CreationDate),
@@ -2513,12 +2518,13 @@ func (c *Catalog) importAsync(ctx context.Context, repository *graveler.Reposito
 				return fmt.Errorf("could not parse storage URI %s: %w", uri, err)
 			}
 
-			walker, err := c.BlockAdapter.GetWalker(repository.StorageID.String(), block.WalkerOptions{StorageURI: uri})
+			sourceID := block.EffectiveStorageID(source.StorageID, repository.StorageID.String())
+			walker, err := c.BlockAdapter.GetWalker(sourceID, block.WalkerOptions{StorageURI: uri})
 			if err != nil {
 				return fmt.Errorf("creating object-store walker on path %s: %w", source.Path, err)
 			}
 
-			it, err := NewWalkEntryIterator(wgCtx, block.NewWalkerWrapper(walker, uri), source.Type, source.Destination, "", "")
+			it, err := NewWalkEntryIterator(wgCtx, block.NewWalkerWrapper(walker, uri), source.Type, source.Destination, "", "", sourceID)
 			if err != nil {
 				return fmt.Errorf("creating walk iterator on path %s: %w", source.Path, err)
 			}
@@ -2607,19 +2613,6 @@ func (c *Catalog) importAsync(ctx context.Context, repository *graveler.Reposito
 	return nil
 }
 
-// verifyImportPaths - Verify that import paths will not cause an import of objects from the repository namespace itself
-func verifyImportPaths(storageNamespace string, params ImportRequest) error {
-	for _, p := range params.Paths {
-		if strings.HasPrefix(p.Path, storageNamespace) {
-			return fmt.Errorf("import path (%s) in repository namespace (%s) is prohibited: %w", p.Path, storageNamespace, ErrInvalidImportSource)
-		}
-		if p.Type == ImportPathTypePrefix && strings.HasPrefix(storageNamespace, p.Path) {
-			return fmt.Errorf("prefix (%s) contains repository namespace: (%s), %w", p.Path, storageNamespace, ErrInvalidImportSource)
-		}
-	}
-	return nil
-}
-
 func (c *Catalog) Import(ctx context.Context, repositoryID, branchID string, params ImportRequest) (string, error) {
 	repository, err := c.getRepository(ctx, repositoryID)
 	if err != nil {
@@ -2631,7 +2624,7 @@ func (c *Catalog) Import(ctx context.Context, repositoryID, branchID string, par
 		return "", err
 	}
 
-	if err = verifyImportPaths(repository.StorageNamespace.String(), params); err != nil {
+	if err = c.ownership.verifyImportPaths(repository.StorageID.String(), repository.StorageNamespace.String(), params); err != nil {
 		return "", err
 	}
 
@@ -2719,12 +2712,13 @@ func (c *Catalog) WriteRange(ctx context.Context, repositoryID string, params Wr
 		return nil, nil, fmt.Errorf("could not parse storage URI %s: %w", uri, err)
 	}
 
-	walker, err := c.BlockAdapter.GetWalker(repository.StorageID.String(), block.WalkerOptions{StorageURI: uri})
+	sourceID := block.EffectiveStorageID(params.StorageID, repository.StorageID.String())
+	walker, err := c.BlockAdapter.GetWalker(sourceID, block.WalkerOptions{StorageURI: uri})
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating object-store walker on path %s: %w", params.SourceURI, err)
 	}
 
-	it, err := NewWalkEntryIterator(ctx, block.NewWalkerWrapper(walker, uri), ImportPathTypePrefix, params.Prepend, params.After, params.ContinuationToken)
+	it, err := NewWalkEntryIterator(ctx, block.NewWalkerWrapper(walker, uri), ImportPathTypePrefix, params.Prepend, params.After, params.ContinuationToken, sourceID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating walk iterator: %w", err)
 	}
@@ -2745,7 +2739,7 @@ func (c *Catalog) WriteRange(ctx context.Context, repositoryID string, params Wr
 
 		for _, obj := range skipped {
 			p := params.Prepend + obj.RelativeKey
-			entryRecord := objectStoreEntryToEntryRecord(obj, p)
+			entryRecord := objectStoreEntryToEntryRecord(obj, p, sourceID)
 			entry, err := EntryToValue(entryRecord.Entry)
 			if err != nil {
 				return nil, nil, fmt.Errorf("parsing entry: %w", err)
@@ -3027,7 +3021,7 @@ func (c *Catalog) PrepareGCUncommitted(ctx context.Context, repositoryID string,
 	uw := NewUncommittedWriter(fd)
 
 	// Write parquet to local storage
-	newMark, hasData, err := gcWriteUncommitted(ctx, c.Store, repository, uw, mark, runID, c.UGCPrepareMaxFileSize, c.UGCPrepareInterval)
+	newMark, hasData, err := gcWriteUncommitted(ctx, c.Store, repository, c.ownership, uw, mark, runID, c.UGCPrepareMaxFileSize, c.UGCPrepareInterval)
 	if err != nil {
 		return nil, err
 	}
@@ -3137,6 +3131,7 @@ func (c *Catalog) CopyEntry(ctx context.Context, srcRepository, srcRef, srcPath,
 	// copy data to a new physical address
 	dstEntry := *srcEntry
 	dstEntry.Path = destPath
+	dstEntry.StorageID = ""
 	dstEntry.AddressType = AddressTypeRelative
 	dstEntry.PhysicalAddress = c.PathProvider.NewPath()
 
@@ -3144,11 +3139,9 @@ func (c *Catalog) CopyEntry(ctx context.Context, srcRepository, srcRef, srcPath,
 		dstEntry.Metadata = metadata
 	}
 
-	srcObject := block.ObjectPointer{
-		StorageID:        srcRepo.StorageID,
-		StorageNamespace: srcRepo.StorageNamespace,
-		IdentifierType:   srcEntry.AddressType.ToIdentifierType(),
-		Identifier:       srcEntry.PhysicalAddress,
+	srcObject, err := block.NewObjectPointer(srcEntry.StorageID, srcRepo.StorageID, srcRepo.StorageNamespace, srcEntry.PhysicalAddress, srcEntry.AddressType.ToIdentifierType())
+	if err != nil {
+		return nil, err
 	}
 	destObj := block.ObjectPointer{
 		StorageID:        destRepo.StorageID,
@@ -3509,13 +3502,13 @@ func newCatalogEntryFromEntry(commonPrefix bool, path string, ent *Entry) DBEntr
 		Path(path)
 	if ent != nil {
 		b.PhysicalAddress(ent.Address)
+		b.StorageID(ent.StorageId)
 		b.AddressType(addressTypeToCatalog(ent.AddressType))
 		b.CreationDate(ent.LastModified.AsTime())
 		b.Size(ent.Size)
 		b.Checksum(ent.ETag)
 		b.Metadata(ent.Metadata)
 		b.Expired(false)
-		b.AddressType(addressTypeToCatalog(ent.AddressType))
 		b.ContentType(ContentTypeOrDefault(ent.ContentType))
 	}
 	return b.Build()

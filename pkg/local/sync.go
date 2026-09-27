@@ -133,7 +133,7 @@ func (s *SyncManager) apply(ctx context.Context, rootPath string, remote *uri.UR
 	return nil
 }
 
-func (s *SyncManager) downloadFile(ctx context.Context, remote *uri.URI, path, destination string, objStat apigen.ObjectStats) error {
+func (s *SyncManager) downloadFile(ctx context.Context, remote *uri.URI, path, destination string, objStat apigen.ObjectStats, signedURL string) error {
 	sizeBytes := swag.Int64Value(objStat.SizeBytes)
 	f, err := os.Create(destination)
 	if err != nil {
@@ -159,8 +159,8 @@ func (s *SyncManager) downloadFile(ctx context.Context, remote *uri.URI, path, d
 	isRetry := false
 	return backoff.Retry(func() error {
 		var body io.Reader
-		if s.cfg.Presign {
-			resp, err := s.httpClient.Get(objStat.PhysicalAddress)
+		if signedURL != "" {
+			resp, err := s.httpClient.Get(signedURL)
 			if err != nil {
 				return err
 			}
@@ -239,7 +239,7 @@ func (s *SyncManager) download(ctx context.Context, rootPath string, remote *uri
 
 	statResp, err := s.client.StatObjectWithResponse(ctx, remote.Repository, remote.Ref, &apigen.StatObjectParams{
 		Path:         remotePath,
-		Presign:      swag.Bool(s.cfg.Presign),
+		Presign:      swag.Bool(false),
 		UserMetadata: swag.Bool(true),
 	})
 	if err != nil {
@@ -251,6 +251,29 @@ func (s *SyncManager) download(ctx context.Context, rootPath string, remote *uri
 		return fmt.Errorf("(stat: HTTP %d, message: %s): %w", statResp.StatusCode(), httpErr.Message, ErrDownloadingFile)
 	}
 	objStat := *statResp.JSON200
+	var signedURL string
+	presign := s.cfg.Presign
+	if s.cfg.ReadPresign != nil {
+		presign = *s.cfg.ReadPresign
+	} else if presign {
+		presign, err = helpers.ObjectSupportsPresign(ctx, s.client, swag.StringValue(objStat.StorageId))
+		if err != nil {
+			return err
+		}
+	}
+	if presign {
+		signedStat, err := s.client.StatObjectWithResponse(ctx, remote.Repository, remote.Ref, &apigen.StatObjectParams{
+			Path:    remotePath,
+			Presign: swag.Bool(true),
+		})
+		if err != nil {
+			return err
+		}
+		if signedStat.JSON200 == nil {
+			return fmt.Errorf("presign download: HTTP %d: %w", signedStat.StatusCode(), ErrDownloadingFile)
+		}
+		signedURL = signedStat.JSON200.PhysicalAddress
+	}
 	// get mtime
 	mtimeSecs, err := getMtimeFromStats(objStat)
 	if err != nil {
@@ -285,7 +308,7 @@ func (s *SyncManager) download(ctx context.Context, rootPath string, remote *uri
 				return os.Symlink(symlinkTarget, destination)
 			}
 		}
-		if err = s.downloadFile(ctx, remote, p, destination, objStat); err != nil {
+		if err = s.downloadFile(ctx, remote, p, destination, objStat, signedURL); err != nil {
 			return err
 		}
 	}

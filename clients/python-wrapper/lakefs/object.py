@@ -58,9 +58,7 @@ class LakeFSIOBase(_BaseLakeFSObject, IO):
         self._mode = mode
         self._pos = 0
         super().__init__(client)
-        # must be set after super().__init__ to ensure the client is properly initialized.
-        self._pre_sign = pre_sign if pre_sign is not None \
-            else self._client.storage_config_by_id(obj.storage_id()).pre_sign_support
+        self._pre_sign = pre_sign
 
     @property
     def mode(self) -> str:
@@ -208,7 +206,12 @@ class ObjectReader(LakeFSIOBase):
         Returns whether the pre_sign mode is enabled
         """
         if self._pre_sign is None:
-            self._pre_sign = self._client.storage_config_by_id(self._obj.storage_id()).pre_sign_support
+            storage_id = self._obj.stat().storage_id or self._obj.storage_id()
+            try:
+                self._pre_sign = self._client.storage_config_by_id(storage_id).pre_sign_support
+            except KeyError:
+                # Let proxied access report a missing source configuration.
+                self._pre_sign = False
         return self._pre_sign
 
     @pre_sign.setter

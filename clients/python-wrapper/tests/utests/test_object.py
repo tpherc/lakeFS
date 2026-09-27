@@ -1,6 +1,7 @@
 import http
 from contextlib import contextmanager
 from typing import get_args
+from types import SimpleNamespace
 import urllib3
 
 import pytest
@@ -10,6 +11,7 @@ from lakefs_sdk import ApiResponse
 
 from lakefs.client import SINGLE_STORAGE_ID
 from lakefs.object import ReadModes
+from lakefs.models import ObjectInfo
 from tests.utests.common import get_test_client, expect_exception_context
 
 
@@ -52,6 +54,7 @@ def readable_object_context(monkey, **kwargs):
         from lakefs.object import StoredObject
         clt = get_test_client()
         monkey.setattr(clt, "storage_config_by_id", lambda *args: StorageTestConfig())
+        monkey.setattr(lakefs_sdk.api.ObjectsApi, "stat_object", lambda *args, **kwargs: ObjectTestStats())
         read_obj = StoredObject(client=clt, **kwargs)
         monkey.setattr(read_obj, "_storage_id", SINGLE_STORAGE_ID)
         yield read_obj
@@ -116,7 +119,7 @@ class TestObjectReader:
         object_stats = ObjectTestStats()
         object_stats.path = test_kwargs.path
         object_stats.size_bytes = len(data)
-        patch_setattr(lakefs_sdk.api.ObjectsApi, "stat_object", lambda *args: object_stats)
+        patch_setattr(lakefs_sdk.api.ObjectsApi, "stat_object", lambda *args, **kwargs: object_stats)
 
         # read negative
         with expect_exception_context(OSError):
@@ -182,7 +185,7 @@ class TestObjectReader:
                 object_stats = ObjectTestStats()
                 object_stats.path = test_kwargs.path
                 object_stats.size_bytes = len(data)
-                monkeypatch.setattr(lakefs_sdk.api.ObjectsApi, "stat_object", lambda *args: object_stats)
+                monkeypatch.setattr(lakefs_sdk.api.ObjectsApi, "stat_object", lambda *args, **kwargs: object_stats)
 
                 # Read whole file
                 start_pos = 0
@@ -388,3 +391,56 @@ class TestObjectWriter:
             with obj.reader() as fd:
                 with expect_exception_context(OSError):
                     fd.fileno()
+
+
+class TestObjectStorageSelection:
+    @pytest.mark.parametrize("source_support", [True, False])
+    def test_automatic_reader_uses_source_capability(self, monkeypatch, source_support):
+        with readable_object_context(monkeypatch, **ObjectTestKWArgs().__dict__) as obj:
+            monkeypatch.setattr(obj, "stat", lambda: ObjectInfo(**{**ObjectTestStats().dict(), "storage_id": "source"}))
+            selected = []
+
+            def storage_config(storage_id):
+                selected.append(storage_id)
+                return SimpleNamespace(pre_sign_support=source_support)
+
+            monkeypatch.setattr(obj._client, "storage_config_by_id", storage_config)
+            with obj.reader() as reader:
+                assert not selected
+                assert reader.pre_sign is source_support
+                assert selected == ["source"]
+
+    @pytest.mark.parametrize("choice", [True, False])
+    def test_explicit_reader_does_not_probe_source(self, monkeypatch, choice):
+        with readable_object_context(monkeypatch, **ObjectTestKWArgs().__dict__) as obj:
+            monkeypatch.setattr(obj, "stat", lambda: pytest.fail("explicit presign should not fetch stats"))
+            with obj.reader(pre_sign=choice) as reader:
+                assert reader.pre_sign is choice
+
+    def test_missing_source_configuration_uses_proxy(self, monkeypatch):
+        with readable_object_context(monkeypatch, **ObjectTestKWArgs().__dict__) as obj:
+            stats = ObjectInfo(**{**ObjectTestStats().dict(), "storage_id": "removed"})
+            monkeypatch.setattr(obj, "stat", lambda: stats)
+            monkeypatch.setattr(obj._client, "storage_config_by_id", lambda storage_id: {}[storage_id])
+            with obj.reader() as reader:
+                assert reader.pre_sign is False
+
+    def test_writer_keeps_home_capability_when_overwriting_foreign_object(self, monkeypatch):
+        with writeable_object_context(monkeypatch, **ObjectTestKWArgs().__dict__) as obj:
+            selected = []
+
+            def storage_config(storage_id):
+                selected.append(storage_id)
+                return SimpleNamespace(pre_sign_support=False)
+
+            monkeypatch.setattr(obj._client, "storage_config_by_id", storage_config)
+            monkeypatch.setattr(obj, "stat", lambda: pytest.fail("writer must not resolve old source"))
+            writer = obj.writer()
+            assert writer.pre_sign is False
+            assert selected == [SINGLE_STORAGE_ID]
+            writer._fd.close()
+
+    def test_legacy_object_info_defaults_to_repository_binding(self):
+        stats = ObjectTestStats().dict()
+        stats.pop("storage_id", None)
+        assert ObjectInfo(**stats).storage_id is None

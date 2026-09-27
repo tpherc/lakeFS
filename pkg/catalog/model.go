@@ -27,6 +27,7 @@ type Repository struct {
 }
 
 type DBEntry struct {
+	StorageID       string
 	CommonLevel     bool
 	Path            string
 	PhysicalAddress string
@@ -136,6 +137,11 @@ type DBEntryBuilder struct {
 
 func NewDBEntryBuilder() *DBEntryBuilder {
 	return &DBEntryBuilder{}
+}
+
+func (b *DBEntryBuilder) StorageID(storageID string) *DBEntryBuilder {
+	b.dbEntry.StorageID = storageID
+	return b
 }
 
 func (b *DBEntryBuilder) CommonLevel(commonLevel bool) *DBEntryBuilder {

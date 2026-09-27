@@ -53,6 +53,10 @@ import io.lakefs.clients.sdk.JSON;
  */
 @javax.annotation.Generated(value = "org.openapitools.codegen.languages.JavaClientCodegen")
 public class ObjectStageCreation {
+  public static final String SERIALIZED_NAME_STORAGE_ID = "storage_id";
+  @SerializedName(SERIALIZED_NAME_STORAGE_ID)
+  private String storageId;
+
   public static final String SERIALIZED_NAME_PHYSICAL_ADDRESS = "physical_address";
   @SerializedName(SERIALIZED_NAME_PHYSICAL_ADDRESS)
   private String physicalAddress;
@@ -83,6 +87,27 @@ public class ObjectStageCreation {
 
   public ObjectStageCreation() {
   }
+
+  public ObjectStageCreation storageId(String storageId) {
+    
+    this.storageId = storageId;
+    return this;
+  }
+
+   /**
+   * Configured backend containing the source object. Omitted or empty uses the repository backend.
+   * @return storageId
+  **/
+  @javax.annotation.Nullable
+  public String getStorageId() {
+    return storageId;
+  }
+
+
+  public void setStorageId(String storageId) {
+    this.storageId = storageId;
+  }
+
 
   public ObjectStageCreation physicalAddress(String physicalAddress) {
     
@@ -293,7 +318,8 @@ public class ObjectStageCreation {
       return false;
     }
     ObjectStageCreation objectStageCreation = (ObjectStageCreation) o;
-    return Objects.equals(this.physicalAddress, objectStageCreation.physicalAddress) &&
+    return Objects.equals(this.storageId, objectStageCreation.storageId) &&
+        Objects.equals(this.physicalAddress, objectStageCreation.physicalAddress) &&
         Objects.equals(this.checksum, objectStageCreation.checksum) &&
         Objects.equals(this.sizeBytes, objectStageCreation.sizeBytes) &&
         Objects.equals(this.mtime, objectStageCreation.mtime) &&
@@ -305,13 +331,14 @@ public class ObjectStageCreation {
 
   @Override
   public int hashCode() {
-    return Objects.hash(physicalAddress, checksum, sizeBytes, mtime, metadata, contentType, force, additionalProperties);
+    return Objects.hash(storageId, physicalAddress, checksum, sizeBytes, mtime, metadata, contentType, force, additionalProperties);
   }
 
   @Override
   public String toString() {
     StringBuilder sb = new StringBuilder();
     sb.append("class ObjectStageCreation {\n");
+    sb.append("    storageId: ").append(toIndentedString(storageId)).append("\n");
     sb.append("    physicalAddress: ").append(toIndentedString(physicalAddress)).append("\n");
     sb.append("    checksum: ").append(toIndentedString(checksum)).append("\n");
     sb.append("    sizeBytes: ").append(toIndentedString(sizeBytes)).append("\n");
@@ -342,6 +369,7 @@ public class ObjectStageCreation {
   static {
     // a set of all properties/fields (JSON key names)
     openapiFields = new HashSet<String>();
+    openapiFields.add("storage_id");
     openapiFields.add("physical_address");
     openapiFields.add("checksum");
     openapiFields.add("size_bytes");
@@ -377,6 +405,9 @@ public class ObjectStageCreation {
         }
       }
         JsonObject jsonObj = jsonElement.getAsJsonObject();
+      if ((jsonObj.get("storage_id") != null && !jsonObj.get("storage_id").isJsonNull()) && !jsonObj.get("storage_id").isJsonPrimitive()) {
+        throw new IllegalArgumentException(String.format("Expected the field `storage_id` to be a primitive type in the JSON string but got `%s`", jsonObj.get("storage_id").toString()));
+      }
       if (!jsonObj.get("physical_address").isJsonPrimitive()) {
         throw new IllegalArgumentException(String.format("Expected the field `physical_address` to be a primitive type in the JSON string but got `%s`", jsonObj.get("physical_address").toString()));
       }

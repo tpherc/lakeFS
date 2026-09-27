@@ -25,14 +25,17 @@ func EntryToValue(entry *Entry) (*graveler.Value, error) {
 		return nil, err
 	}
 	// calculate entry identity
-	checksum := ident.NewAddressWriter().
+	identity := ident.NewAddressWriter().
 		MarshalInt64(entry.Size).
 		MarshalString(entry.ETag).
 		MarshalStringMap(entry.Metadata).
-		MarshalStringOpt(entry.ContentType). // optional in order to keep identity of old entries without content-type
-		Identity()
+		MarshalStringOpt(entry.ContentType) // optional in order to keep identity of old entries without content-type
+	if entry.StorageId != "" {
+		// A distinct type and field name keep this separate from optional content type.
+		identity.MarshalStringMap(map[string]string{"storage_id": entry.StorageId})
+	}
 	return &graveler.Value{
-		Identity: checksum,
+		Identity: identity.Identity(),
 		Data:     data,
 	}, nil
 }

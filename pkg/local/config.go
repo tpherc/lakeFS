@@ -6,6 +6,8 @@ const (
 )
 
 type SyncFlags struct {
+	// ReadPresign preserves an explicit read choice independently of home upload capabilities.
+	ReadPresign      *bool
 	Parallelism      int
 	Presign          bool
 	PresignMultipart bool

@@ -21,4 +21,5 @@ message Entry {
 		FULL = 2;
 	}
 	AddressType address_type = 6;
+	string storage_id = 8;
 }

@@ -84,6 +84,7 @@ type Entry struct {
 	Metadata      map[string]string      `protobuf:"bytes,5,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	AddressType   Entry_AddressType      `protobuf:"varint,6,opt,name=address_type,json=addressType,proto3,enum=catalog.Entry_AddressType" json:"address_type,omitempty"`
 	ContentType   string                 `protobuf:"bytes,7,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	StorageId     string                 `protobuf:"bytes,8,opt,name=storage_id,json=storageId,proto3" json:"storage_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -163,6 +164,13 @@ func (x *Entry) GetAddressType() Entry_AddressType {
 func (x *Entry) GetContentType() string {
 	if x != nil {
 		return x.ContentType
+	}
+	return ""
+}
+
+func (x *Entry) GetStorageId() string {
+	if x != nil {
+		return x.StorageId
 	}
 	return ""
 }
@@ -787,7 +795,7 @@ var File_catalog_catalog_proto protoreflect.FileDescriptor
 
 const file_catalog_catalog_proto_rawDesc = "" +
 	"\n" +
-	"\x15catalog/catalog.proto\x12\acatalog\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x17graveler/graveler.proto\"\xa5\x03\n" +
+	"\x15catalog/catalog.proto\x12\acatalog\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x17graveler/graveler.proto\"\xc4\x03\n" +
 	"\x05Entry\x12\x18\n" +
 	"\aaddress\x18\x01 \x01(\tR\aaddress\x12?\n" +
 	"\rlast_modified\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\flastModified\x12\x12\n" +
@@ -795,7 +803,9 @@ const file_catalog_catalog_proto_rawDesc = "" +
 	"\x05e_tag\x18\x04 \x01(\tR\x04eTag\x128\n" +
 	"\bmetadata\x18\x05 \x03(\v2\x1c.catalog.Entry.MetadataEntryR\bmetadata\x12=\n" +
 	"\faddress_type\x18\x06 \x01(\x0e2\x1a.catalog.Entry.AddressTypeR\vaddressType\x12!\n" +
-	"\fcontent_type\x18\a \x01(\tR\vcontentType\x1a;\n" +
+	"\fcontent_type\x18\a \x01(\tR\vcontentType\x12\x1d\n" +
+	"\n" +
+	"storage_id\x18\b \x01(\tR\tstorageId\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"?\n" +

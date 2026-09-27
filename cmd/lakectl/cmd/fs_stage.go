@@ -23,6 +23,7 @@ The object location must be outside the repository's storage namespace`,
 		size, _ := flags.GetInt64("size")
 		mtimeSeconds, _ := flags.GetInt64("mtime")
 		location, _ := flags.GetString("location")
+		storageID := Must(flags.GetString(storageIDFlagName))
 		checksum, _ := flags.GetString("checksum")
 		contentType, _ := flags.GetString("content-type")
 		meta, metaErr := getKV(cmd, "meta")
@@ -34,11 +35,12 @@ The object location must be outside the repository's storage namespace`,
 		repoResp, err := client.GetRepositoryWithResponse(cmd.Context(), pathURI.Repository)
 		DieOnErrorOrUnexpectedStatusCode(repoResp, err, http.StatusOK)
 		ns := strings.TrimSuffix(repoResp.JSON200.StorageNamespace, "/") + "/"
-		if strings.HasPrefix(location, ns) {
+		if storageID == "" && strings.HasPrefix(location, ns) {
 			Die("The staged object must be outside the repository's storage namespace", 1)
 		}
 		obj := apigen.ObjectStageCreation{
 			Checksum:        checksum,
+			StorageId:       &storageID,
 			Mtime:           mtime,
 			PhysicalAddress: location,
 			SizeBytes:       size,
@@ -65,6 +67,7 @@ The object location must be outside the repository's storage namespace`,
 
 //nolint:gochecknoinits
 func init() {
+	withSourceStorageID(fsStageCmd)
 	fsStageCmd.Flags().String("location", "", "fully qualified storage location (i.e. \"s3://bucket/path/to/object\")")
 	fsStageCmd.Flags().Int64("size", 0, "Object size in bytes")
 	fsStageCmd.Flags().String("checksum", "", "Object MD5 checksum as a hexadecimal string")

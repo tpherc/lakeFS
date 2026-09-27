@@ -45,6 +45,7 @@ var fsDownloadCmd = &cobra.Command{
 		}
 
 		downloader := helpers.NewDownloader(client, syncFlags.Presign)
+		downloader.ReadPresign = syncFlags.ReadPresign
 		downloader.PartSize = downloadPartSize
 		downloader.SymlinkSupport = cfg.Local.SymlinkSupport
 		downloader.SkipNonRegularFiles = cfg.Local.SkipNonRegularFiles

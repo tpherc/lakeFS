@@ -36,7 +36,7 @@ type EntryWithMarker struct {
 // bufferSize - buffer size of the buffer between reading entries from the blockstore Walk and passing it on
 const bufferSize = 100
 
-func NewWalkEntryIterator(ctx context.Context, walker *block.WalkerWrapper, sourceType ImportPathType, destination, after, continuationToken string) (*walkEntryIterator, error) {
+func NewWalkEntryIterator(ctx context.Context, walker *block.WalkerWrapper, sourceType ImportPathType, destination, after, continuationToken, storageID string) (*walkEntryIterator, error) {
 	prepend := destination
 	if prepend != "" && !strings.HasSuffix(prepend, "/") {
 		prepend += "/"
@@ -64,7 +64,7 @@ func NewWalkEntryIterator(ctx context.Context, walker *block.WalkerWrapper, sour
 			if sourceType == ImportPathTypeObject {
 				p = destination
 			}
-			record := objectStoreEntryToEntryRecord(e, p)
+			record := objectStoreEntryToEntryRecord(e, p, storageID)
 			it.entries <- EntryWithMarker{
 				EntryRecord: record,
 				Mark: Mark{
@@ -142,11 +142,12 @@ func (it *walkEntryIterator) GetSkippedEntries() []block.ObjectStoreEntry {
 	return it.walker.GetSkippedEntries()
 }
 
-func objectStoreEntryToEntryRecord(e block.ObjectStoreEntry, path string) EntryRecord {
+func objectStoreEntryToEntryRecord(e block.ObjectStoreEntry, path, storageID string) EntryRecord {
 	return EntryRecord{
 		Path: Path(path),
 		Entry: &Entry{
 			Address:      e.Address,
+			StorageId:    storageID,
 			LastModified: timestamppb.New(e.Mtime),
 			Size:         e.Size,
 			ETag:         e.ETag,
